@@ -18,15 +18,15 @@ local NAME_W = 236          -- crew: chevron, online mark, class icon, name, fac
 local LEVEL_W = 44
 local GOLD_W = 96
 local SLOT_W = 50           -- one profession icon with its skill
-local MAX_SLOTS = 12
+local PRIM_SLOTS = 4        -- primary professions shown per row ("+N" when more)
 -- Secondary professions get fixed columns, so they line up on every row.
 local SECONDARY = {
     { line = 185, name = "Cooking", icon = "Interface\\Icons\\INV_Misc_Food_15" },
     { line = 129, name = "First Aid", icon = "Interface\\Icons\\Spell_Holy_SealOfSacrifice" },
     { line = 356, name = "Fishing", icon = "Interface\\Icons\\Trade_Fishing" },
 }
-local SEC_X = NAME_W + LEVEL_W + GOLD_W + 16
-local PRIM_X = SEC_X + #SECONDARY * SLOT_W + 12
+local PRIM_X = NAME_W + LEVEL_W + GOLD_W + 16
+local SEC_X = PRIM_X + PRIM_SLOTS * SLOT_W + 12
 local BASE_SCALE = 1.15     -- text and rows at the default window height
 local MAX_SCALE = 1.9       -- taller windows grow the text up to this
 local INDEX_W = 190         -- recipes: profession list
@@ -530,7 +530,7 @@ local function CrewRow(parent)
         row.sec[i] = Slot(SEC_X + (i - 1) * SLOT_W)
     end
     row.slots = {}
-    for i = 1, MAX_SLOTS do
+    for i = 1, PRIM_SLOTS do
         row.slots[i] = Slot(PRIM_X + (i - 1) * SLOT_W)
     end
     return row
@@ -589,7 +589,7 @@ local function FillCrewRow(row, item)
     end
     row.level:SetText(item.level and item.level > 0 and item.level or "")
     row.gold:SetText(item.gold and item.gold > 0 and MoneyText(item.gold) or "")
-    -- Secondary professions in their own columns, the rest after them.
+    -- Primary professions first, then the secondary ones in fixed columns.
     local sec, primary = {}, {}
     for _, e in ipairs(item.profs or {}) do
         local i = SecondaryIndex(e)
@@ -602,11 +602,7 @@ local function FillCrewRow(row, item)
     for i, s in ipairs(row.sec) do
         FillSlot(s, sec[i], item)
     end
-    local width = row:GetWidth()
-    local fit = MAX_SLOTS
-    if type(width) == "number" and width > 0 then
-        fit = math.max(1, math.floor((width - PRIM_X) / SLOT_W))
-    end
+    local fit = PRIM_SLOTS
     for i, s in ipairs(row.slots) do
         local e = i <= fit and primary[i] or nil
         local more = e and i == fit and #primary > fit and ("+" .. (#primary - fit + 1)) or nil
@@ -838,7 +834,7 @@ local function BuildCrewPage()
         end)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
-    Header("Professions", PRIM_X, 120)
+    Header("Professions", PRIM_X, PRIM_SLOTS * SLOT_W)
 
     page.list = ScrollList(page.frame, ROW_H, CrewRow, FillCrewRow)
     page.list.frame:SetPoint("TOPLEFT", 0, -54)
@@ -1059,10 +1055,20 @@ local function BuildCrewPage()
         local items, anyHint = {}, false
         for _, grp in ipairs(rows) do
             local shown = grp.shown
+            -- Characters: highest level first (or by the Gold column), then name.
             table.sort(shown, function(a, b)
-                if a == ns.me then return true end
-                if b == ns.me then return false end
-                return Before({ a }, ns.LongName(a), { b }, ns.LongName(b), Online(a), Online(b))
+                local pa, pb = ns.db.people[a] or {}, ns.db.people[b] or {}
+                local va, vb
+                if view.sort == "gold" then
+                    va, vb = tonumber(pa.money) or 0, tonumber(pb.money) or 0
+                else
+                    va, vb = pa.level or 0, pb.level or 0
+                end
+                if va ~= vb then
+                    if view.sort ~= "name" and not view.desc then return va < vb end
+                    return va > vb
+                end
+                return ns.LongName(a) < ns.LongName(b)
             end)
             for _, k in ipairs(shown) do
                 local p = ns.db.people[k]
@@ -1094,8 +1100,9 @@ local function BuildCrewPage()
                     class = rep.class,
                     faction = rep.faction,
                     other = allOther,
-                    level = MaxLevel(grp.members),
-                    gold = Sum(grp.members, "money"),
+                    level = nil, -- level and gold only on character rows
+                    gold = nil,
+                    totalGold = Sum(grp.members, "money"),
                     profs = profs,
                     holders = holders,
                     name = grp.label .. "  " .. INK_DIM_HEX .. "(" .. #grp.members .. ")|r" .. (hidden and " (hidden)" or ""),
@@ -1107,7 +1114,7 @@ local function BuildCrewPage()
                         or "Click to open or close. Right-click to hide (asks first)."
                 end
                 item.tooltip = function(tt)
-                    GroupTooltip(tt, { name = grp.label, size = item.size, onlineCount = item.onlineCount, gold = item.gold, profs = profs, hint = item.hint })
+                    GroupTooltip(tt, { name = grp.label, size = item.size, onlineCount = item.onlineCount, gold = item.totalGold, profs = profs, hint = item.hint })
                 end
                 item.onClick = function(button)
                     GameTooltip:Hide()
