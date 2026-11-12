@@ -15,9 +15,14 @@
 -- updates. Showing them again says hello so they catch up.
 --
 -- Messages (kind^payload):
---   HI  hello: ver^reply^level^class^full name^rev of each section
+--   HI  hello: ver^reply^level^class^full name^rev of each section^faction^tag
 --   RQ  please send these sections: "prof,items"
 --   SE  section: name^rev^data
+--   AL  my other characters: name;level;class;faction;rev of each section~...
+--   AR  please send these of your other characters: "name:prof,items~name:shop"
+--   AS  one of my other characters: name^section^rev^data
+-- Your other characters are passed on by whichever character you play, so
+-- friends see all of them without adding each one as a friend.
 --
 -- Long messages are split in parts; sending is paced so the game's
 -- addon-message limit is never hit, and pauses during combat.
@@ -46,7 +51,7 @@ local function Wipe(t)
 end
 
 local function Hidden(name)
-    return name ~= nil and ns.db.hidden[name] == true
+    return name ~= nil and ns.IsHidden(name)
 end
 
 local function FirstName(name)
@@ -156,7 +161,26 @@ local function HelloPayload(reply)
     for _, section in ipairs(ns.SECTIONS) do
         parts[#parts + 1] = me.rev[section] or 0
     end
+    parts[#parts + 1] = me.faction or ""
+    parts[#parts + 1] = ns.db.tag or ""
     return table.concat(parts, "^")
+end
+
+-- Tells a friend about your other characters and what they have.
+local function SendAlts(name)
+    local entries = {}
+    for key, p in pairs(ns.db.people) do
+        if p.mine and key ~= ns.me then
+            local parts = { key, p.level or 0, p.class or "", p.faction or "" }
+            for _, section in ipairs(ns.SECTIONS) do
+                parts[#parts + 1] = p.rev and p.rev[section] or 0
+            end
+            entries[#entries + 1] = table.concat(parts, ";")
+        end
+    end
+    if #entries > 0 then
+        ns.Send(name, "AL", table.concat(entries, "~"), "AL")
+    end
 end
 
 local function SendSection(name, section)
@@ -374,8 +398,15 @@ function Handlers.HI(name, payload, from)
     ns.online[name] = true
     local p = ns.Person(name, true)
     p.name = name
+    p.via = nil -- heard from directly now
     p.level = tonumber(f[3]) or p.level
     p.class = (f[4] or ""):match("^%u+$") or p.class
+    p.faction = (f[11] or ""):match("^%a+$") or p.faction
+    local tag = (f[12] or ""):match("^%x+$")
+    if tag and #tag <= 16 and tag ~= ns.db.tag and tag ~= p.tag then
+        p.tag = tag
+        ns.Changed()
+    end
     p.seen = time()
     if ns.RefreshUI then ns.RefreshUI() end
     if again or Hidden(name) then
@@ -393,6 +424,82 @@ function Handlers.HI(name, payload, from)
     end
     if #want > 0 then
         ns.Send(name, "RQ", table.concat(want, ","))
+    end
+    SendAlts(name)
+end
+
+-- A friend's other characters. Only taken for names that are not yours and
+-- not friends you hear from directly, and only from the same friend.
+function Handlers.AL(name, payload)
+    local tag = ns.db.people[name] and ns.db.people[name].tag
+    local want = {}
+    for entry in payload:gmatch("[^~]+") do
+        local f = Split(entry, ";")
+        local alt = ns.FullName(f[1])
+        local q = alt and ns.db.people[alt]
+        local mineOrMe = alt == ns.me or (q and q.mine)
+        local direct = q and not q.via and ns.db.crew[alt]
+        local otherFriend = q and q.via and q.via ~= name and not (tag and q.tag == tag)
+        if alt and alt ~= name and not mineOrMe and not direct and not otherFriend then
+            q = ns.Person(alt, true)
+            if q.via ~= name or q.tag ~= tag then
+                q.via, q.tag = name, tag
+                ns.Changed()
+            end
+            q.name = alt
+            q.level = tonumber(f[2]) or q.level
+            q.class = (f[3] or ""):match("^%u+$") or q.class
+            q.faction = (f[4] or ""):match("^%a+$") or q.faction
+            local need = {}
+            for i, section in ipairs(ns.SECTIONS) do
+                if (tonumber(f[4 + i]) or 0) > (q.rev[section] or 0) then
+                    need[#need + 1] = section
+                end
+            end
+            if #need > 0 then
+                want[#want + 1] = alt .. ":" .. table.concat(need, ",")
+            end
+        end
+    end
+    if #want > 0 then
+        ns.Send(name, "AR", table.concat(want, "~"))
+    end
+    if ns.RefreshUI then ns.RefreshUI() end
+end
+
+function Handlers.AR(name, payload)
+    if Hidden(name) then
+        return
+    end
+    for alt, list in payload:gmatch("([^:~]+):([^~]*)") do
+        local p = ns.db.people[alt]
+        if p and p.mine and alt ~= ns.me then
+            for section in list:gmatch("[^,]+") do
+                if ns.Encode[section] then
+                    ns.Send(name, "AS", alt .. "^" .. section .. "^" .. (p.rev[section] or 0) .. "^"
+                        .. ns.Encode[section](p[section] or {}), "AS" .. alt .. section)
+                end
+            end
+        end
+    end
+end
+
+function Handlers.AS(name, payload)
+    local alt, section, rev, data = payload:match("^([^%^]+)%^(%a+)%^(%d+)%^(.*)$")
+    local q = alt and ns.db.people[alt]
+    if not q or q.via ~= name or not ns.Decode[section] then
+        return
+    end
+    rev = tonumber(rev)
+    if rev <= (q.rev[section] or 0) then
+        return
+    end
+    local ok, value = pcall(ns.Decode[section], data)
+    if ok and value then
+        q[section] = value
+        q.rev[section] = rev
+        ns.Changed()
+        if ns.RefreshUI then ns.RefreshUI() end
     end
 end
 
@@ -427,16 +534,35 @@ function Handlers.SE(name, payload)
     end
 end
 
--- Hides or shows someone. Hidden people stop getting your data at once;
--- showing them again says hello so both sides catch up.
-function ns.SetHidden(name, hide)
-    if name == ns.me then
+-- Hides or shows a character or a whole friend ("#tag"). Hidden people stop
+-- getting your data at once; showing them again says hello so both sides
+-- catch up.
+function ns.SetHidden(key, hide)
+    if key == ns.me or key == ns.GroupOf(ns.me) then
         return
     end
-    ns.db.hidden[name] = hide and true or nil
+    ns.db.hidden[key] = hide and true or nil
     ns.Changed()
+    local members = { key }
+    if key:sub(1, 1) == "#" then
+        members = {}
+        for k in pairs(ns.db.people) do
+            if ns.GroupOf(k) == key then
+                members[#members + 1] = k
+            end
+        end
+    end
+    for _, name in ipairs(members) do
+        ns.UpdateSharing(name, hide)
+    end
+    if ns.RefreshUI then ns.RefreshUI(true) end
+end
+
+function ns.UpdateSharing(name, hide)
     if hide then
         ForgetQueued(name)
+    elseif ns.IsHidden(name) then
+        return
     elseif ns.online[name] then
         ns.Send(name, "HI", HelloPayload(false))
     else
@@ -456,7 +582,6 @@ function ns.SetHidden(name, hide)
         end
         UpdateFriendsSoon()
     end
-    if ns.RefreshUI then ns.RefreshUI(true) end
 end
 
 local function Handle(from, msg)
@@ -472,6 +597,8 @@ local function Handle(from, msg)
     end
     if kind == "HI" then
         Handlers.HI(name, payload, from)
+    elseif kind == "AR" and name and ns.online[name] and ns.db.crew[name] then
+        Handlers.AR(name, payload)
     elseif name and ns.online[name] and ns.db.crew[name] then
         Handlers[kind](name, payload)
     end

@@ -6,7 +6,7 @@
 --   Data.lua  what we know about each character (professions, recipes,
 --             items, shopping list), collecting it and searching it
 --   Comm.lua  talking to friends' FriendsCraft (hidden whispers)
---   UI.lua    the book, settings, minimap button, item tooltips
+--   UI.lua    the window, settings, minimap button, item tooltips
 
 local ADDON_NAME, ns = ...
 
@@ -18,6 +18,9 @@ local DEFAULTS = {
     hidden = {},   -- [name] = true for people you chose to hide
     minimap = { angle = 215, hide = false },
     tooltips = true, -- crew lines on item tooltips
+    tag = false,     -- random tag shared by all your characters (see below)
+    window = {},     -- size and place of the window
+    view = {},       -- sort order and filters on the Crew page
 }
 
 -------------------------------------------------------------------------------
@@ -71,7 +74,7 @@ function ns.FullName(name)
     end
     -- Character names never hold digits or these marks; "|" would also
     -- let a name pose as colored text or a link.
-    if name:find("[|%^,;:#=/%d%c]") or #name > 60 then
+    if name:find("[|%^,;:#=/~%d%c]") or #name > 60 then
         return nil
     end
     if ns.forever then
@@ -236,6 +239,17 @@ handlers.ADDON_LOADED = { function(name)
     end
     FriendsCraftDB = MergeDefaults(DEFAULTS, FriendsCraftDB or {})
     ns.db = FriendsCraftDB
+    -- A random tag, made once and the same for all your characters. Friends
+    -- use it to put your characters together under one name. It says
+    -- nothing about your account.
+    if type(ns.db.tag) ~= "string" or not ns.db.tag:match("^%x+$") then
+        local hex, seed = {}, math.floor((time and time() or 0) + (GetTime and GetTime() or 0) * 1000)
+        for i = 1, 12 do
+            hex[i] = string.format("%x", (math.random(0, 15) + seed + i * 7) % 16)
+            seed = math.floor(seed / 3)
+        end
+        ns.db.tag = table.concat(hex)
+    end
 end }
 handlers.PLAYER_LOGIN = { function()
     DetectForever()
@@ -267,7 +281,7 @@ SLASH_FRIENDSCRAFT2 = "/friendscraft"
 SlashCmdList.FRIENDSCRAFT = function(input)
     local cmd = strtrim(input or ""):lower()
     if cmd == "help" then
-        ns.Print("/fc opens the book, /fc settings opens its settings. Friends with FriendsCraft show up by themselves when you are on each other's friends list.")
+        ns.Print("/fc opens the window, /fc settings opens its settings. Friends with FriendsCraft show up by themselves when you are on each other's friends list.")
     elseif cmd == "settings" or cmd == "options" or cmd == "config" then
         ns.OpenSettings()
     else

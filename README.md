@@ -15,14 +15,15 @@ Nothing to set up. Friends who also have FriendsCraft show up by themselves:
 
 - You must be on each other's friends list: the in-game friends list or Battle.net friends.
 - When you log in, FriendsCraft quietly says hello to your online friends. Everyone who has it joins your crew.
+- A friend's other characters show up too, grouped under that friend, once they log in on any of them. You only need to be friends with one of their characters.
 - Only friends see your data. Someone who is not on your friends list gets nothing.
 
 ## What you get
 
-Open the book with the button on the minimap or by typing `/fc`.
+Open the window with the button on the minimap or by typing `/fc`. Drag the bottom right corner to make it bigger; it remembers its size and place.
 
-- **Crew:** one line per character: name, gold, and an icon for each profession with its skill. Hover an icon to see the full skill (for example 44 / 75). A "!" means it is time to visit a trainer.
-- **Recipes:** pick a profession on the left page to see its recipes on the right, or search all recipes at once. Hover a recipe to see the materials and who in the crew has them.
+- **Crew:** a table of everyone, sortable by name, level or gold (click a column title). A friend with several characters is one line showing their best skill in each profession; click it to see each character. Filter by name, online only, faction or profession. Characters of the other faction are faded and show their faction crest. Hover an icon to see the full skill (for example 44 / 75). A "!" means it is time to visit a trainer.
+- **Recipes:** pick a profession on the left to see its recipes on the right, or search all recipes at once. Hover a recipe to see the materials and who in the crew has them.
 - **Shopping list:** add what you need ("12 Peacebloom"). Everyone sees it, with how many you still need and who already has some. Click your own item to remove it.
 - **Who has it:** search everyone's bags and banks.
 - **Item tooltips:** hover any item in the game to see who in the crew has it, who needs it and who can make it.
@@ -30,7 +31,7 @@ Open the book with the button on the minimap or by typing `/fc`.
 
 ## Hiding people
 
-On the Crew page, right-click someone and confirm to hide them. Hidden people are left out of the book and the item tooltips, and they stop getting your data (what they already got stays in their book). When you show them again, they catch up. Click "Show hidden" to see them again, then right-click to bring them back. Use the filter box to find someone by name or profession.
+On the Crew page, right-click a friend's line and confirm to hide that friend with all their characters, or right-click a single character to hide just that one. Hidden people are left out of the list and the item tooltips, and they stop getting your data (what they already got stays with them). When you show them again, they catch up. Click "Show hidden" to see them again, then right-click to bring them back.
 
 ## Good to know
 
@@ -43,4 +44,4 @@ On the Crew page, right-click someone and confirm to hide them. Hidden people ar
 
 ## Commands
 
-`/fc` opens the book. `/fc settings` opens its settings. `/fc help` shows a short reminder.
+`/fc` opens the window. `/fc settings` opens its settings. `/fc help` shows a short reminder.

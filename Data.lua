@@ -1,6 +1,9 @@
 -- FriendsCraft: data
 -- One record per character (yours, your alts, your friends):
 --   name, class, level, seen (time), mine (true for your own characters)
+--   faction  "Alliance" or "Horde"
+--   tag      random tag of the account the character belongs to
+--   via      for a friend's alt: the friend character that passed it on
 --   rev      = { prof = t, recipes = t, items = t, shop = t }  change times
 --   prof     = { { line = skillLineID, name = "Herbalism", rank = 87, max = 150, icon = fileID }, ... }
 --   recipes  = { ["Tailoring"] = { [recipeID] = outputItemID or 0 }, ... }
@@ -39,16 +42,42 @@ function ns.Changed()
     cache = {}
 end
 
--- Characters shown in the window and tooltips: you, your alts, and your
--- crew. People you hid are left out unless includeHidden is set.
+-- Which friend a character belongs to: all characters with the same tag
+-- are one friend ("#tag"); a character without a tag stands alone.
+function ns.GroupOf(key)
+    local p = ns.db.people[key]
+    if key == ns.me or (p and p.mine) then
+        return "#" .. ns.db.tag
+    end
+    if p and type(p.tag) == "string" then
+        return "#" .. p.tag
+    end
+    return key
+end
+
+-- Hidden by itself or because its friend is hidden. Never your own.
+function ns.IsHidden(key)
+    if key == ns.me then
+        return false
+    end
+    return ns.db.hidden[key] == true or ns.db.hidden[ns.GroupOf(key)] == true
+end
+
+-- A friend's alt we only know through that friend.
+local function Relayed(p)
+    return p and type(p.via) == "string" and ns.db.crew[p.via] == true
+end
+
+-- Characters shown in the window and tooltips: you, your alts, your crew
+-- and their alts. People you hid are left out unless includeHidden is set.
 -- Returns a new list each time (safe to sort).
 local function BuildVisible(includeHidden)
     local list = {}
     local function Shown(key)
-        return key == ns.me or includeHidden or not ns.db.hidden[key]
+        return includeHidden or not ns.IsHidden(key)
     end
     for key, p in pairs(ns.db.people) do
-        if (p.mine or ns.db.crew[key]) and Shown(key) then
+        if (p.mine or ns.db.crew[key] or Relayed(p)) and Shown(key) then
             list[#list + 1] = key
         end
     end
@@ -223,6 +252,9 @@ function ns.UpdateBasics()
     me.name = ns.me
     me.level = UnitLevel("player")
     me.class = select(2, UnitClass("player"))
+    local faction = UnitFactionGroup and UnitFactionGroup("player")
+    me.faction = type(faction) == "string" and faction:match("^%a+$") or me.faction
+    me.tag = ns.db.tag
     me.seen = time()
 end
 

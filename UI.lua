@@ -1,7 +1,8 @@
--- FriendsCraft: the book window, minimap button and item tooltips.
--- The book uses the game's own spellbook page art when the game has it,
--- and draws a plain parchment book otherwise. Built from plain frames so
--- it does not depend on Blizzard templates that change between versions.
+-- FriendsCraft: the main window, minimap button and item tooltips.
+-- The window uses the game's own panel frame (with a round portrait) when
+-- the game has it, and a plain dark panel otherwise. Pages are picked with
+-- icon tabs on the left side, like the game's own side tabs. The window can
+-- be moved and resized; lists scroll.
 
 local ADDON_NAME, ns = ...
 
@@ -9,36 +10,33 @@ local ADDON_NAME, ns = ...
 -- Sizes and colors
 -------------------------------------------------------------------------------
 
-local PAGE_H = 470          -- height of a page
-local HEAD_H = 0            -- no bar above the pages (tabs sit on the side)
-local HEADING_Y = -22       -- page heading, from the top of the page
-local CONTROLS_Y = -50      -- search boxes etc.
-local LIST_TOP = 84         -- first list row, from the top of the page
-local LIST_BOTTOM = 52      -- room under the list for page numbers
-local ROW_H = 20            -- text rows
-local CREW_ROW_H = 26       -- crew rows (with icons)
-local SLOTS = 6             -- profession icons per crew row
-local GOLD_W = 84           -- gold column on the crew page
-local PAGE_W = 330          -- width of a page (the art is fitted to it)
-local INDEX_H = 24          -- profession rows on the Recipes index
+local ROW_H = 22            -- list rows
+local DEFAULT_W, DEFAULT_H = 780, 500
+local MIN_W, MIN_H = 640, 380
+local MAX_W, MAX_H = 1400, 1000
+local NAME_W = 236          -- crew: chevron, online mark, class icon, name, faction
+local LEVEL_W = 44
+local GOLD_W = 96
+local SLOT_W = 50           -- one profession icon with its skill
+local MAX_SLOTS = 12
+local INDEX_W = 190         -- recipes: profession list
+local ICON = "Interface\\Icons\\INV_Relics_LibramOfHope"
 
 local ART = {
-    left = "spellbook-background-evergreen-left",
     tab = "common-sidetab",
     tabSelected = "common-sidetab-selected",
     tabHover = "common-sidetab-hover",
 }
 
--- Dark ink for text on the pages (never gold on parchment).
-local INK = { 0.20, 0.12, 0.05 }
-local INK_DIM = { 0.30, 0.21, 0.12 }
-local INK_GOOD = { 0.05, 0.36, 0.05 }
-local INK_DIM_HEX = "|cff4d361f"
--- Game tooltips stay dark, so they keep light colors.
+-- Light text on the dark panel.
+local INK = { 0.93, 0.91, 0.86 }
+local INK_DIM = { 0.68, 0.64, 0.56 }
+local INK_GOOD = { 0.45, 0.9, 0.45 }
+local INK_DIM_HEX = "|cffada38f"
+local GOLD = { 1, 0.82, 0 }
 local INFO = { 0.5, 0.83, 1 }
 local GOOD = { 0.4, 1, 0.4 }
-
-local PW, INSET_X, CONTENT_W, LIST_H -- set in Layout()
+local FADE = 0.5            -- characters of the other faction
 
 -------------------------------------------------------------------------------
 -- Art helpers
@@ -81,13 +79,6 @@ local function MirrorAtlas(tex, name)
         return
     end
     tex:SetAtlas(name, true)
-end
-
-local function Layout()
-    PW = PAGE_W
-    INSET_X = 32
-    CONTENT_W = PW - 2 * INSET_X
-    LIST_H = PAGE_H - LIST_TOP - LIST_BOTTOM
 end
 
 -------------------------------------------------------------------------------
@@ -181,36 +172,42 @@ local function JoinHolders(list, limit)
     return table.concat(parts, ", ")
 end
 
--- Text in dark ink, without the drop shadow (it smudges on parchment).
+-------------------------------------------------------------------------------
+-- Building blocks
+-------------------------------------------------------------------------------
+
 local function Ink(parent, template, text, color)
     local fs = parent:CreateFontString(nil, "ARTWORK", template or "GameFontHighlight")
     fs:SetJustifyH("LEFT")
     fs:SetText(text or "")
     local c = color or INK
     fs:SetTextColor(c[1], c[2], c[3])
-    fs:SetShadowOffset(0, 0)
     return fs
 end
 
+-- A text box in the game's own style, with a grey hint while empty.
 local function Input(parent, width, placeholder)
-    local e = CreateFrame("EditBox", nil, parent, "BackdropTemplate")
-    e:SetSize(width, 24)
+    local ok, e = pcall(CreateFrame, "EditBox", nil, parent, "InputBoxTemplate")
+    if not ok or not e then
+        e = CreateFrame("EditBox", nil, parent, "BackdropTemplate")
+        if e.SetBackdrop then
+            e:SetBackdrop({
+                bgFile = "Interface\\Buttons\\WHITE8X8",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                tile = true, tileSize = 16, edgeSize = 12,
+                insets = { left = 3, right = 3, top = 3, bottom = 3 },
+            })
+            e:SetBackdropColor(0, 0, 0, 0.6)
+            e:SetBackdropBorderColor(0.5, 0.45, 0.35, 1)
+        end
+        e:SetTextInsets(6, 6, 0, 0)
+    end
+    e:SetSize(width, 22)
     e:SetAutoFocus(false)
     e:SetFontObject(ChatFontNormal)
-    e:SetTextColor(INK[1], INK[2], INK[3])
-    e:SetTextInsets(8, 8, 0, 0)
-    if e.SetBackdrop then
-        e:SetBackdrop({
-            bgFile = "Interface\\Buttons\\WHITE8X8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true, tileSize = 16, edgeSize = 12,
-            insets = { left = 3, right = 3, top = 3, bottom = 3 },
-        })
-        e:SetBackdropColor(0.99, 0.95, 0.85, 0.9)
-        e:SetBackdropBorderColor(0.35, 0.25, 0.15, 1)
-    end
-    local hint = Ink(e, "GameFontHighlight", placeholder, INK_DIM)
-    hint:SetPoint("LEFT", 9, 0)
+    e:SetTextColor(1, 1, 1)
+    local hint = Ink(e, "GameFontHighlightSmall", placeholder, INK_DIM)
+    hint:SetPoint("LEFT", 4, 0)
     local function UpdateHint()
         hint:SetShown(e:GetText() == "" and not e:HasFocus())
     end
@@ -229,173 +226,69 @@ local function Button(parent, text, width, onClick)
     return b
 end
 
--------------------------------------------------------------------------------
--- The book
--------------------------------------------------------------------------------
-
-local window, tabs, currentTab, prevButton, nextButton, leftNumber, rightNumber
-local pages = {}
-
--- One page of the drawn book: parchment with a shade toward the spine.
--- Everything is painted on the window itself, so it always stays under
--- the text and buttons.
-local function DrawnPage(x, isLeft)
-    local paper = window:CreateTexture(nil, "BACKGROUND", nil, 1)
-    paper:SetPoint("TOPLEFT", x, -HEAD_H)
-    paper:SetSize(PW, PAGE_H)
-    paper:SetColorTexture(0.93, 0.86, 0.70, 1)
-    local shade = window:CreateTexture(nil, "BACKGROUND", nil, 2)
-    shade:SetSize(40, PAGE_H)
-    shade:SetPoint("TOPLEFT", isLeft and (x + PW - 40) or x, -HEAD_H)
-    shade:SetColorTexture(0.35, 0.24, 0.12, 0.25)
-    if shade.SetGradient and CreateColor then
-        local dark, clear = CreateColor(0.35, 0.24, 0.12, 0.45), CreateColor(0.35, 0.24, 0.12, 0)
-        shade:SetColorTexture(1, 1, 1, 1)
-        if not pcall(shade.SetGradient, shade, "HORIZONTAL", isLeft and clear or dark, isLeft and dark or clear) then
-            shade:SetColorTexture(0.35, 0.24, 0.12, 0.25)
-        end
+local function CheckButton(parent)
+    local ok, b = pcall(CreateFrame, "CheckButton", nil, parent, "UICheckButtonTemplate")
+    if not ok or not b then
+        b = CreateFrame("CheckButton", nil, parent)
+        b:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
+        b:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
+        b:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
+        b:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
     end
-end
-
-local function BuildArt()
-    local useAtlas = AtlasInfo(ART.left)
-    if useAtlas then
-        local l = window:CreateTexture(nil, "BACKGROUND")
-        l:SetPoint("TOPLEFT", 0, -HEAD_H)
-        l:SetSize(PW, PAGE_H)
-        l:SetAtlas(ART.left)
-        local r = window:CreateTexture(nil, "BACKGROUND")
-        r:SetPoint("TOPLEFT", PW, -HEAD_H)
-        r:SetSize(PW, PAGE_H)
-        -- The left page mirrored: the game's right page has a flourish at
-        -- the top that runs into the text.
-        MirrorAtlas(r, ART.left)
-        r:SetSize(PW, PAGE_H)
-    else
-        -- Leather cover a little larger than the pages.
-        local cover = window:CreateTexture(nil, "BACKGROUND", nil, -2)
-        cover:SetPoint("TOPLEFT", -8, -HEAD_H + 8)
-        cover:SetPoint("BOTTOMRIGHT", 8, -8)
-        cover:SetColorTexture(0.28, 0.15, 0.07, 1)
-        DrawnPage(0, true)
-        DrawnPage(PW, false)
-    end
-end
-
--- Page-turn arrows: the spellbook's own buttons, or plain < > in ink.
-local function Arrow(dir, onClick)
-    local b = CreateFrame("Button", nil, window)
-    b:SetSize(28, 28)
-    local base = "Interface\\Buttons\\UI-SpellbookIcon-" .. (dir < 0 and "PrevPage" or "NextPage")
-    local test = b:CreateTexture(nil, "ARTWORK")
-    if UseFile(test, base .. "-Up") then
-        test:SetAllPoints()
-        b:SetNormalTexture(test)
-        b:SetPushedTexture(base .. "-Down")
-        b:SetDisabledTexture(base .. "-Disabled")
-        b:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
-    else
-        test:Hide()
-        local fs = Ink(b, "GameFontNormalLarge", dir < 0 and "<" or ">")
-        fs:SetPoint("CENTER")
-    end
-    b:SetScript("OnClick", onClick)
-    b:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText(dir < 0 and "Previous page" or "Next page", 1, 1, 1)
-        GameTooltip:Show()
-    end)
-    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
     return b
 end
 
-local function SetArrow(b, on)
-    b:SetEnabled(on)
-    b:SetAlpha(on and 1 or 0.35)
+local function CheckSound(on)
+    if PlaySound and SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
+        pcall(PlaySound, on and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
+    end
 end
 
--- Page numbers and arrows for the list on the open tab.
-local function UpdateFooter(list)
-    local spread = list and list.spread or 0
-    if not list then
-        leftNumber:SetText("")
-        rightNumber:SetText("")
-    elseif list.single then
-        local total = math.max(1, math.ceil(#list.items / list.perSpread))
-        leftNumber:SetText("")
-        rightNumber:SetText(total > 1 and ("Page " .. (spread + 1) .. " of " .. total) or "")
-    else
-        leftNumber:SetText("Page " .. (spread * 2 + 1))
-        rightNumber:SetText("Page " .. (spread * 2 + 2))
-    end
-    SetArrow(prevButton, spread > 0)
-    SetArrow(nextButton, list ~= nil and (spread + 1) * list.perSpread < #list.items)
+-- A small tick box with a label, used for the filters.
+local function Toggle(parent, label, get, set)
+    local b = CheckButton(parent)
+    b:SetSize(24, 24)
+    b.label = Ink(b, "GameFontHighlightSmall", label)
+    b.label:SetPoint("LEFT", b, "RIGHT", 0, 1)
+    b:SetScript("OnClick", function(self)
+        local on = self:GetChecked() and true or false
+        set(on)
+        CheckSound(on)
+    end)
+    b.SyncFilter = function() b:SetChecked(get() and true or false) end
+    return b
 end
 
-local function TurnPage(delta)
-    local page = pages[currentTab]
-    local list = page and page.list
-    if not list then
-        return
-    end
-    local last = math.max(0, math.ceil(#list.items / list.perSpread) - 1)
-    local spread = math.max(0, math.min(last, list.spread + delta))
-    if spread ~= list.spread then
-        list.spread = spread
-        list:Draw()
-        if PlaySound and SOUNDKIT and SOUNDKIT.IG_ABILITY_PAGE_TURN then
-            pcall(PlaySound, SOUNDKIT.IG_ABILITY_PAGE_TURN)
+local function FactionTexture(tex, faction)
+    if faction == "Alliance" or faction == "Horde" then
+        if UseFile(tex, "Interface\\FriendsFrame\\PlusManz-" .. faction) then
+            tex:Show()
+            return true
         end
     end
-end
-
--- A tab is one opened spread: page.left and page.right are the two pages.
-local function NewPage(key, leftTitle, rightTitle)
-    local page = { key = key }
-    page.frame = CreateFrame("Frame", nil, window)
-    page.frame:SetAllPoints()
-    page.frame:Hide()
-    for side = 1, 2 do
-        local f = CreateFrame("Frame", nil, page.frame)
-        f:SetPoint("TOPLEFT", (side == 1 and 0 or PW) + INSET_X, -HEAD_H)
-        f:SetSize(CONTENT_W, PAGE_H)
-        f:EnableMouseWheel(true)
-        f:SetScript("OnMouseWheel", function(_, delta) TurnPage(delta > 0 and -1 or 1) end)
-        local title = side == 1 and leftTitle or rightTitle
-        f.heading = false
-        if title then
-            local h = Ink(f, "GameFontNormalLarge", title)
-            h:SetPoint("TOPLEFT", 0, HEADING_Y)
-            f.heading = h
-        end
-        if side == 1 then page.left = f else page.right = f end
-    end
-    pages[key] = page
-    return page
-end
-
--- A short note at the top of the right page, under its heading and clear
--- of the corner art. At most two lines, so it never runs into the list.
-local function Status(page)
-    local fs = Ink(page.right, "GameFontHighlight", "", INK_DIM)
-    fs:SetPoint("TOPLEFT", 0, CONTROLS_Y + 2)
-    fs:SetWidth(CONTENT_W)
-    fs:SetWordWrap(true)
-    if fs.SetMaxLines then
-        fs:SetMaxLines(2)
-    end
-    return fs
+    tex:Hide()
+    return false
 end
 
 -------------------------------------------------------------------------------
--- Lists. item = { text, color, indent, tooltip = fn(tt), onClick = fn(button) }
+-- Scrolling list: rows are made to fill the height; the mouse wheel and the
+-- bar on the right scroll. item = { text, color, tooltip = fn(tt),
+-- onClick = fn(button) } for text rows; crew rows use their own items.
 -------------------------------------------------------------------------------
 
 local function RowScripts(row)
     row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    row.stripe = row:CreateTexture(nil, "BACKGROUND")
+    row.stripe:SetAllPoints()
+    row.stripe:SetColorTexture(1, 1, 1, 0.04)
     local hl = row:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(0.45, 0.30, 0.10, 0.15)
+    if UseFile(hl, "Interface\\QuestFrame\\UI-QuestTitleHighlight") then
+        hl:SetBlendMode("ADD")
+        hl:SetAlpha(0.6)
+    else
+        hl:SetColorTexture(1, 1, 1, 0.1)
+    end
     row:SetScript("OnEnter", function(self)
         if self.item and self.item.tooltip then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -411,68 +304,154 @@ local function RowScripts(row)
     end)
 end
 
--- Fills the left page, then the right page, then turns to the next spread.
-local function FlowList(page)
-    local list = { items = {}, spread = 0, rows = {} }
-    local perPage = math.floor(LIST_H / ROW_H)
-    for side = 1, 2 do
-        local parent = side == 1 and page.left or page.right
-        for i = 1, perPage do
-            local row = CreateFrame("Button", nil, parent)
-            row:SetSize(CONTENT_W, ROW_H)
-            row:SetPoint("TOPLEFT", 0, -(LIST_TOP + (i - 1) * ROW_H))
-            row.text = Ink(row, "GameFontHighlight")
-            row.text:SetPoint("LEFT", 2, 0)
-            row.text:SetPoint("RIGHT", -2, 0)
-            row.text:SetWordWrap(false)
+local function ScrollList(parent, rowH, makeRow, fillRow)
+    local list = { rows = {}, items = {}, offset = 0, count = 0 }
+    local f = CreateFrame("Frame", nil, parent)
+    list.frame = f
+    f:EnableMouseWheel(true)
+
+    local bar = CreateFrame("Slider", nil, f)
+    bar:SetWidth(10)
+    bar:SetPoint("TOPRIGHT", 0, 0)
+    bar:SetPoint("BOTTOMRIGHT", 0, 0)
+    bar:SetOrientation("VERTICAL")
+    local track = bar:CreateTexture(nil, "BACKGROUND")
+    track:SetAllPoints()
+    track:SetColorTexture(0, 0, 0, 0.35)
+    bar:SetThumbTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
+    local thumb = bar.GetThumbTexture and bar:GetThumbTexture()
+    if type(thumb) == "table" then
+        thumb:SetSize(16, 24)
+    end
+    bar:SetMinMaxValues(0, 0)
+    bar:SetValueStep(1)
+    bar:SetValue(0)
+    list.bar = bar
+
+    function list:Visible()
+        local h = f:GetHeight()
+        if type(h) ~= "number" or h <= 0 then
+            h = 15 * rowH
+        end
+        return math.max(1, math.floor(h / rowH))
+    end
+
+    function list:Layout()
+        self.count = self:Visible()
+        for i = #self.rows + 1, self.count do
+            local row = makeRow(f)
+            row:SetPoint("TOPLEFT", 0, -(i - 1) * rowH)
+            row:SetPoint("RIGHT", bar, "LEFT", -4, 0)
+            row:SetHeight(rowH)
             row.item = false
-            RowScripts(row)
-            list.rows[#list.rows + 1] = row
+            self.rows[i] = row
         end
     end
-    list.perSpread = #list.rows
 
     function list:Draw()
-        local first = self.spread * self.perSpread
         for i, row in ipairs(self.rows) do
-            local item = self.items[first + i]
+            local item = i <= self.count and self.items[self.offset + i]
             row.item = item or false
             if item then
-                row.text:SetPoint("LEFT", 2 + (item.indent or 0), 0)
-                row.text:SetText(item.text or "")
-                local c = item.color or INK
-                row.text:SetTextColor(c[1], c[2], c[3])
+                fillRow(row, item)
+                if row.stripe then
+                    row.stripe:SetShown((self.offset + i) % 2 == 0)
+                end
                 row:Show()
             else
                 row:Hide()
             end
         end
-        UpdateFooter(self)
+        local max = math.max(0, #self.items - self.count)
+        bar:SetMinMaxValues(0, max)
+        bar:SetValue(self.offset)
+        bar:SetShown(max > 0)
+    end
+
+    function list:SetOffset(value)
+        local max = math.max(0, #self.items - self.count)
+        value = math.max(0, math.min(max, math.floor((value or 0) + 0.5)))
+        if value ~= self.offset then
+            self.offset = value
+            self:Draw()
+        end
     end
 
     function list:SetItems(items)
         self.items = items
-        local last = math.max(0, math.ceil(#items / self.perSpread) - 1)
-        self.spread = math.min(self.spread, last)
+        self:Layout()
+        self.offset = math.max(0, math.min(self.offset, #items - self.count))
         self:Draw()
     end
-    page.list = list
+
+    bar:SetScript("OnValueChanged", function(_, value) list:SetOffset(value) end)
+    f:SetScript("OnMouseWheel", function(_, delta) list:SetOffset(list.offset + (delta > 0 and -3 or 3)) end)
+    f:SetScript("OnSizeChanged", function() list:SetItems(list.items) end)
     return list
 end
 
+local function TextRow(parent)
+    local row = CreateFrame("Button", nil, parent)
+    RowScripts(row)
+    row.text = Ink(row, "GameFontHighlight")
+    row.text:SetPoint("LEFT", 6, 0)
+    row.text:SetPoint("RIGHT", -4, 0)
+    row.text:SetWordWrap(false)
+    return row
+end
+
+local function FillTextRow(row, item)
+    row.text:SetText(item.text or "")
+    local c = item.color or INK
+    row.text:SetTextColor(c[1], c[2], c[3])
+end
+
 -------------------------------------------------------------------------------
--- Crew: a ledger across both pages, one line per character.
---   left page:  class icon, online mark, name, gold
---   right page: profession icons with skill (hover for details)
+-- The window
+-------------------------------------------------------------------------------
+
+local window, content, tabs, currentTab
+local pages = {}
+
+local function NewPage(key)
+    local page = { key = key }
+    page.frame = CreateFrame("Frame", nil, content)
+    page.frame:SetAllPoints()
+    page.frame:Hide()
+    pages[key] = page
+    return page
+end
+
+-- A line of help text at the bottom of a page.
+local function Status(page)
+    local fs = Ink(page.frame, "GameFontHighlightSmall", "", INK_DIM)
+    fs:SetPoint("BOTTOMLEFT", 4, 4)
+    fs:SetPoint("RIGHT", -150, 0)
+    fs:SetWordWrap(false)
+    return fs
+end
+
+-------------------------------------------------------------------------------
+-- Crew: everyone in one sortable table. A friend with several characters is
+-- one line you can open (+) to see each character.
 -------------------------------------------------------------------------------
 
 local function ProfTooltip(slot)
-    local e, p = slot.entry, slot.person
+    local e = slot.entry
     if not e then
         return
     end
     GameTooltip:SetOwner(slot, "ANCHOR_RIGHT")
     GameTooltip:SetText(e.name, 1, 1, 1)
+    if slot.holders then
+        -- A friend's line: everyone of theirs who has it, best first.
+        for _, h in ipairs(slot.holders) do
+            GameTooltip:AddLine(string.format("%s: %d / %d", ns.ShortName(h.key), h.rank, h.max), INFO[1], INFO[2], INFO[3])
+        end
+        GameTooltip:Show()
+        return
+    end
+    local p = slot.person
     GameTooltip:AddLine(string.format("Skill %d / %d", e.rank, e.max), INFO[1], INFO[2], INFO[3])
     local hint = ns.ProfessionHint(e, p and p.level)
     if hint then
@@ -491,47 +470,49 @@ end
 
 local function CrewRow(parent)
     local row = CreateFrame("Button", nil, parent)
-    row:SetSize(PW + CONTENT_W, CREW_ROW_H)
-    row.item = false
     RowScripts(row)
-    row.class = row:CreateTexture(nil, "ARTWORK")
-    row.class:SetSize(18, 18)
-    row.class:SetPoint("LEFT", 0, 0)
+    row.chevron = row:CreateTexture(nil, "ARTWORK")
+    row.chevron:SetSize(14, 14)
     row.online = row:CreateTexture(nil, "ARTWORK")
     row.online:SetSize(12, 12)
-    row.online:SetPoint("LEFT", 21, 0)
     if not UseFile(row.online, "Interface\\FriendsFrame\\StatusIcon-Online") then
-        row.online:SetColorTexture(0.1, 0.6, 0.1, 1)
+        row.online:SetColorTexture(0.1, 0.8, 0.1, 1)
         row.online:SetSize(7, 7)
     end
+    row.class = row:CreateTexture(nil, "ARTWORK")
+    row.class:SetSize(16, 16)
     row.name = Ink(row, "GameFontHighlight")
-    row.name:SetPoint("LEFT", 36, 0)
-    row.name:SetWidth(CONTENT_W - 36 - GOLD_W - 4)
     row.name:SetWordWrap(false)
+    row.faction = row:CreateTexture(nil, "ARTWORK")
+    row.faction:SetSize(18, 18)
+    row.faction:SetPoint("LEFT", NAME_W - 22, 0)
+    row.level = Ink(row, "GameFontHighlight")
+    row.level:SetPoint("LEFT", NAME_W, 0)
+    row.level:SetWidth(LEVEL_W)
     row.gold = Ink(row, "GameFontHighlight")
     row.gold:SetJustifyH("RIGHT")
-    row.gold:SetPoint("RIGHT", row, "LEFT", CONTENT_W, 0)
+    row.gold:SetPoint("LEFT", NAME_W + LEVEL_W, 0)
     row.gold:SetWidth(GOLD_W)
     row.slots = {}
-    local slotW = math.floor(CONTENT_W / SLOTS)
-    for i = 1, SLOTS do
+    local profX = NAME_W + LEVEL_W + GOLD_W + 16
+    for i = 1, MAX_SLOTS do
         local s = CreateFrame("Button", nil, row)
-        s:SetSize(20, 20)
-        s:SetPoint("LEFT", PW + (i - 1) * slotW, 0)
-        s.entry = false
+        s:SetSize(18, 18)
+        s:SetPoint("LEFT", profX + (i - 1) * SLOT_W, 0)
+        s.entry, s.person, s.holders = false, false, false
         s.icon = s:CreateTexture(nil, "ARTWORK")
         s.icon:SetAllPoints()
-        s.num = Ink(s, "GameFontHighlight")
+        s.num = Ink(s, "GameFontHighlightSmall")
         s.num:SetPoint("LEFT", s, "RIGHT", 3, 0)
         -- "!" = can learn the next rank (a mark, not just a color)
-        s.mark = Ink(s, "GameFontNormal", "!", INK_GOOD)
+        s.mark = Ink(s, "GameFontNormal", "!", GOOD)
         s.mark:SetPoint("LEFT", s.num, "RIGHT", 1, 0)
-        s:RegisterForClicks("RightButtonUp")
+        s:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         s:SetScript("OnEnter", ProfTooltip)
         s:SetScript("OnLeave", function() GameTooltip:Hide() end)
         s:SetScript("OnClick", function(_, button)
             if row.item and row.item.onClick then
-                row.item.onClick(button or "RightButton")
+                row.item.onClick(button or "LeftButton")
             end
         end)
         row.slots[i] = s
@@ -540,21 +521,55 @@ local function CrewRow(parent)
 end
 
 local function FillCrewRow(row, item)
-    local p, key = item.person, item.key
-    SetClassIcon(row.class, p.class)
+    local x = item.child and 18 or 0
+    row.chevron:ClearAllPoints()
+    row.chevron:SetPoint("LEFT", x + 2, 0)
+    if item.group then
+        UseFile(row.chevron, item.open and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
+        row.chevron:Show()
+    else
+        row.chevron:Hide()
+    end
+    row.online:ClearAllPoints()
+    row.online:SetPoint("CENTER", row, "LEFT", x + 24, 0)
     row.online:SetShown(item.online)
+    row.class:ClearAllPoints()
+    row.class:SetPoint("LEFT", x + 32, 0)
+    SetClassIcon(row.class, item.class)
+    row.name:ClearAllPoints()
+    row.name:SetPoint("LEFT", x + 52, 0)
+    row.name:SetWidth(NAME_W - x - 52 - 24)
     row.name:SetText(item.name)
-    local c = item.hidden and INK_DIM or INK
+    local c = item.hidden and INK_DIM or (item.group and GOLD) or INK
     row.name:SetTextColor(c[1], c[2], c[3])
-    row.gold:SetText(p.money and p.money > 0 and MoneyText(p.money) or "")
-    local profs = p.prof or {}
+    -- The other faction: faded, with its crest so it is not shown by fading alone.
+    row:SetAlpha(item.other and FADE or 1)
+    if item.other then
+        FactionTexture(row.faction, item.faction)
+    else
+        row.faction:Hide()
+    end
+    row.level:SetText(item.level and item.level > 0 and item.level or "")
+    row.gold:SetText(item.gold and item.gold > 0 and MoneyText(item.gold) or "")
+    local width = row:GetWidth()
+    local fit = MAX_SLOTS
+    if type(width) == "number" and width > 0 then
+        fit = math.max(1, math.floor((width - (NAME_W + LEVEL_W + GOLD_W + 16)) / SLOT_W))
+    end
+    local profs = item.profs or {}
     for i, s in ipairs(row.slots) do
         local e = profs[i]
-        s.entry, s.person, s.key = e or false, p, key
-        if e then
+        s.entry, s.person, s.key = e or false, item.person or false, item.key
+        s.holders = item.holders and e and item.holders[e.name] or false
+        if e and i <= fit then
             s.icon:SetTexture(ns.ProfIcon(e))
-            s.num:SetText(e.rank)
-            s.mark:SetShown(ns.TrainerNow(e, p.level))
+            if i == fit and #profs > fit then
+                s.num:SetText("+" .. (#profs - fit + 1))
+                s.mark:Hide()
+            else
+                s.num:SetText(e.rank)
+                s.mark:SetShown(not item.group and ns.TrainerNow(e, item.person and item.person.level))
+            end
             s:Show()
         else
             s:Hide()
@@ -567,7 +582,7 @@ local function CrewTooltip(tt, item)
     local r, g, b = ClassColor(p.class)
     tt:SetText(ns.LongName(key), r, g, b)
     if p.level and p.level > 0 then
-        tt:AddLine("Level " .. p.level .. " " .. ClassName(p.class), 1, 1, 1)
+        tt:AddLine("Level " .. p.level .. " " .. ClassName(p.class) .. (p.faction and (", " .. p.faction) or ""), 1, 1, 1)
     end
     if key == ns.me then
         tt:AddLine("This is you", INFO[1], INFO[2], INFO[3])
@@ -575,6 +590,8 @@ local function CrewTooltip(tt, item)
         tt:AddLine("Online now", GOOD[1], GOOD[2], GOOD[3])
     elseif p.mine then
         tt:AddLine("Your alt, last played " .. ns.Ago(p.seen), INFO[1], INFO[2], INFO[3])
+    elseif p.via then
+        tt:AddLine("Shared by " .. ns.ShortName(p.via) .. " (same player)", 0.8, 0.8, 0.8)
     elseif not p.rev or not next(p.rev) then
         tt:AddLine("Waiting for their data", 0.8, 0.8, 0.8)
     else
@@ -586,24 +603,35 @@ local function CrewTooltip(tt, item)
     if not p.prof or #p.prof == 0 then
         tt:AddLine("No professions shared yet", 0.8, 0.8, 0.8)
     end
-    if key ~= ns.me then
-        if item.hidden then
-            tt:AddLine("Hidden: they get none of your data.", 0.8, 0.8, 0.8)
-            tt:AddLine("Right-click to show again.", 1, 0.82, 0)
-        else
-            tt:AddLine("Right-click to hide (asks first).", 1, 0.82, 0)
-        end
+    if item.hint then
+        tt:AddLine(item.hint, 1, 0.82, 0, true)
+    end
+end
+
+local function GroupTooltip(tt, item)
+    tt:SetText(item.name, 1, 1, 1)
+    tt:AddLine(string.format("%d characters, %d online", item.size, item.onlineCount), INFO[1], INFO[2], INFO[3])
+    if item.gold and item.gold > 0 then
+        tt:AddLine("Gold, all characters: " .. MoneyText(item.gold, true), 1, 1, 1)
+    end
+    for _, e in ipairs(item.profs) do
+        tt:AddLine(string.format("%s %d / %d (%s)", e.name, e.rank, e.max, ns.ShortName(e.owner)), 0.9, 0.9, 0.9)
+    end
+    if item.hint then
+        tt:AddLine(item.hint, 1, 0.82, 0, true)
     end
 end
 
 -- Hiding asks first, so a stray right-click does nothing.
-local function AskToHide(key)
-    local p = ns.db.people[key]
+local function AskToHide(key, label)
     local text
-    if p and p.mine then
-        text = "Hide your alt " .. ns.LongName(key) .. " from the book?\n\nUse \"Show hidden\" on the Crew page to bring it back."
+    local p = ns.db.people[key]
+    if key:sub(1, 1) == "#" then
+        text = "Hide " .. label .. " and all their characters?\n\nThey leave your list and stop getting your data. Use \"Show hidden\" on the Crew page to bring them back."
+    elseif p and p.mine then
+        text = "Hide your alt " .. ns.LongName(key) .. " from the list?\n\nUse \"Show hidden\" on the Crew page to bring it back."
     else
-        text = "Hide " .. ns.LongName(key) .. "?\n\nThey leave your book and stop getting your data. Use \"Show hidden\" on the Crew page to bring them back."
+        text = "Hide " .. ns.LongName(key) .. "?\n\nThey leave your list and stop getting your data. Use \"Show hidden\" on the Crew page to bring them back."
     end
     if not StaticPopup_Show or not StaticPopupDialogs then
         ns.SetHidden(key, true)
@@ -626,52 +654,145 @@ local function AskToHide(key)
     StaticPopup_Show("FRIENDSCRAFT_HIDE", text, nil, key)
 end
 
+-- Best skill in each profession over several characters.
+local function BestProfs(keys)
+    local best, holders = {}, {}
+    for _, key in ipairs(keys) do
+        local p = ns.db.people[key]
+        for _, e in ipairs(p and p.prof or {}) do
+            holders[e.name] = holders[e.name] or {}
+            table.insert(holders[e.name], { key = key, rank = e.rank, max = e.max })
+            if not best[e.name] or e.rank > best[e.name].rank then
+                best[e.name] = { name = e.name, rank = e.rank, max = e.max, line = e.line, icon = e.icon, owner = key }
+            end
+        end
+    end
+    local list = {}
+    for _, e in pairs(best) do
+        list[#list + 1] = e
+    end
+    table.sort(list, function(a, b)
+        if a.rank ~= b.rank then return a.rank > b.rank end
+        return a.name < b.name
+    end)
+    for _, h in pairs(holders) do
+        table.sort(h, function(a, b) return a.rank > b.rank end)
+    end
+    return list, holders
+end
+
 local function BuildCrewPage()
-    local page = NewPage("crew", "Crew", "Professions")
-    page.filter = Input(page.left, CONTENT_W, "Filter by name or profession")
-    page.filter:SetPoint("TOPLEFT", 0, CONTROLS_Y)
-    page.filter:SetScript("OnTextChanged", function(self)
+    local page = NewPage("crew")
+    local view = ns.db.view
+    view.sort = view.sort or "name"
+    view.open = view.open or {}
+    if view.alliance == nil then view.alliance = true end
+    if view.horde == nil then view.horde = true end
+
+    page.search = Input(page.frame, 170, "Name or profession")
+    page.search:SetPoint("TOPLEFT", 8, -4)
+    page.search:SetScript("OnTextChanged", function(self)
         self.UpdateHint()
-        page.list.spread = 0
+        page.list.offset = 0
         page:Refresh()
     end)
+
+    local function Redraw()
+        page.list.offset = 0
+        page:Refresh()
+    end
+    page.toggles = {
+        Toggle(page.frame, "Online only", function() return view.onlineOnly end, function(on) view.onlineOnly = on; Redraw() end),
+        Toggle(page.frame, "Alliance", function() return view.alliance end, function(on) view.alliance = on; Redraw() end),
+        Toggle(page.frame, "Horde", function() return view.horde end, function(on) view.horde = on; Redraw() end),
+    }
+    page.toggles[1]:SetPoint("LEFT", page.search, "RIGHT", 10, 0)
+    for i = 2, #page.toggles do
+        page.toggles[i]:SetPoint("LEFT", page.toggles[i - 1].label, "RIGHT", 10, -1)
+    end
+
+    -- Profession filter: a menu where the game has one, otherwise each
+    -- click picks the next profession.
+    page.profButton = Button(page.frame, "Profession: any", 160, function(self)
+        local names = page.profNames or {}
+        local function Pick(name)
+            page.prof = name
+            Redraw()
+        end
+        if MenuUtil and MenuUtil.CreateContextMenu then
+            local ok = pcall(MenuUtil.CreateContextMenu, self, function(_, root)
+                root:CreateRadio("Any profession", function() return page.prof == nil end, function() Pick(nil) end)
+                for _, name in ipairs(names) do
+                    root:CreateRadio(name, function() return page.prof == name end, function() Pick(name) end)
+                end
+            end)
+            if ok then
+                return
+            end
+        end
+        local nextName
+        if page.prof == nil then
+            nextName = names[1]
+        else
+            for i, name in ipairs(names) do
+                if name == page.prof then nextName = names[i + 1] end
+            end
+        end
+        Pick(nextName)
+    end)
+    page.profButton:SetPoint("LEFT", page.toggles[#page.toggles].label, "RIGHT", 12, 0)
+
+    -- Column headers; click one to sort by it, again to flip the order.
+    local header = CreateFrame("Frame", nil, page.frame)
+    header:SetPoint("TOPLEFT", 0, -32)
+    header:SetPoint("RIGHT", -14, 0)
+    header:SetHeight(20)
+    local line = header:CreateTexture(nil, "ARTWORK")
+    line:SetPoint("BOTTOMLEFT")
+    line:SetPoint("BOTTOMRIGHT")
+    line:SetHeight(1)
+    line:SetColorTexture(1, 0.82, 0, 0.35)
+    page.headers = {}
+    local function Header(text, x, width, key)
+        local b = CreateFrame("Button", nil, header)
+        b:SetPoint("LEFT", x, 0)
+        b:SetSize(width, 20)
+        b.label = Ink(b, "GameFontNormalSmall", text, GOLD)
+        b.label:SetPoint("LEFT", 2, 0)
+        b.sortKey = key
+        if key then
+            local hl = b:CreateTexture(nil, "HIGHLIGHT")
+            hl:SetAllPoints()
+            hl:SetColorTexture(1, 1, 1, 0.08)
+            b:SetScript("OnClick", function()
+                if view.sort == key then
+                    view.desc = not view.desc
+                else
+                    view.sort, view.desc = key, key ~= "name"
+                end
+                page:Refresh()
+            end)
+        end
+        page.headers[#page.headers + 1] = b
+        return b
+    end
+    Header("Name", 30, NAME_W - 30, "name")
+    Header("Level", NAME_W - 4, LEVEL_W + 4, "level")
+    local goldHeader = Header("Gold", NAME_W + LEVEL_W, GOLD_W, "gold")
+    goldHeader.label:ClearAllPoints()
+    goldHeader.label:SetPoint("RIGHT", -2, 0)
+    Header("Professions", NAME_W + LEVEL_W + GOLD_W + 16, 120)
+
+    page.list = ScrollList(page.frame, ROW_H, CrewRow, FillCrewRow)
+    page.list.frame:SetPoint("TOPLEFT", 0, -54)
+    page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
+
     page.status = Status(page)
-    page.hiddenButton = Button(page.right, "Show hidden", 128, function()
+    page.hiddenButton = Button(page.frame, "Show hidden", 140, function()
         page.showHidden = not page.showHidden
         page:Refresh()
     end)
-    page.hiddenButton:SetPoint("TOPRIGHT", 0, HEADING_Y + 2)
-    page.legend = Ink(page.right, "GameFontHighlightSmall", "! = can learn the next rank at a trainer", INK_DIM)
-    page.legend:SetPoint("TOPLEFT", 0, -(LIST_TOP + LIST_H + 2))
-
-    local list = { items = {}, spread = 0, rows = {}, single = true }
-    list.perSpread = math.floor(LIST_H / CREW_ROW_H)
-    for i = 1, list.perSpread do
-        local row = CrewRow(page.left)
-        row:SetPoint("TOPLEFT", 0, -(LIST_TOP + (i - 1) * CREW_ROW_H))
-        list.rows[i] = row
-    end
-    function list:Draw()
-        local first = self.spread * self.perSpread
-        for i, row in ipairs(self.rows) do
-            local item = self.items[first + i]
-            row.item = item or false
-            if item then
-                FillCrewRow(row, item)
-                row:Show()
-            else
-                row:Hide()
-            end
-        end
-        UpdateFooter(self)
-    end
-    function list:SetItems(items)
-        self.items = items
-        local last = math.max(0, math.ceil(#items / self.perSpread) - 1)
-        self.spread = math.min(self.spread, last)
-        self:Draw()
-    end
-    page.list = list
+    page.hiddenButton:SetPoint("BOTTOMRIGHT", -16, 0)
 
     local function Matches(key, p, text)
         if text == "" or ns.LongName(key):lower():find(text, 1, true) then
@@ -685,17 +806,146 @@ local function BuildCrewPage()
         return false
     end
 
+    local function Passes(key, p, text)
+        if not Matches(key, p, text) then
+            return false
+        end
+        if view.onlineOnly and key ~= ns.me and not ns.online[key] then
+            return false
+        end
+        if (p.faction == "Alliance" and not view.alliance) or (p.faction == "Horde" and not view.horde) then
+            return false
+        end
+        if page.prof then
+            local has = false
+            for _, e in ipairs(p.prof or {}) do
+                if e.name == page.prof then has = true end
+            end
+            return has
+        end
+        return true
+    end
+
     function page:Refresh()
-        local text = strtrim(self.filter:GetText() or ""):lower()
-        local friends, online, hiddenCount = 0, 0, 0
-        for key in pairs(ns.db.crew) do
-            friends = friends + 1
-            if ns.online[key] then online = online + 1 end
+        for _, t in ipairs(self.toggles) do
+            t.SyncFilter()
+        end
+        local text = strtrim(self.search:GetText() or ""):lower()
+        local myFaction = ns.Me().faction
+        local function Other(p)
+            return p.faction ~= nil and myFaction ~= nil and p.faction ~= myFaction
+        end
+
+        -- Group everyone by friend.
+        local groups, order, profNames, seenProf = {}, {}, {}, {}
+        for _, key in ipairs(ns.VisiblePeople(self.showHidden)) do
+            local g = ns.GroupOf(key)
+            if not groups[g] then
+                groups[g] = { key = g, members = {} }
+                order[#order + 1] = g
+            end
+            table.insert(groups[g].members, key)
+            local p = ns.db.people[key]
+            for _, e in ipairs(p and p.prof or {}) do
+                if not seenProf[e.name] then
+                    seenProf[e.name] = true
+                    profNames[#profNames + 1] = e.name
+                end
+            end
+        end
+        table.sort(profNames)
+        self.profNames = profNames
+        if page.prof and not seenProf[page.prof] then
+            page.prof = nil
+        end
+        self.profButton:SetText("Profession: " .. (page.prof or "any"))
+
+        local function Sum(keys, field)
+            local total = 0
+            for _, k in ipairs(keys) do
+                local p = ns.db.people[k]
+                total = total + (p and tonumber(p[field]) or 0)
+            end
+            return total
+        end
+        local function MaxLevel(keys)
+            local best = 0
+            for _, k in ipairs(keys) do
+                local p = ns.db.people[k]
+                best = math.max(best, p and p.level or 0)
+            end
+            return best
+        end
+        local function Online(k)
+            return k ~= ns.me and ns.online[k] == true
+        end
+
+        -- Sort value for a list of characters (one friend or one character).
+        local function Value(keys)
+            if view.sort == "level" then
+                return MaxLevel(keys)
+            elseif view.sort == "gold" then
+                return Sum(keys, "money")
+            end
+            return nil
+        end
+        local function Before(aKeys, aName, bKeys, bName, aOnline, bOnline)
+            local va, vb = Value(aKeys), Value(bKeys)
+            if va and va ~= vb then
+                if view.desc then return va > vb end
+                return va < vb
+            end
+            if not va and aOnline ~= bOnline then
+                return aOnline -- by name: friends online first
+            end
+            if view.desc and view.sort == "name" then
+                return aName > bName
+            end
+            return aName < bName
+        end
+
+        local rows = {}
+        local mine = ns.GroupOf(ns.me)
+        local friends, friendsOnline, chars, hiddenCount = 0, 0, 0, 0
+        for _, g in ipairs(order) do
+            local grp = groups[g]
+            grp.shown, grp.onlineCount = {}, 0
+            for _, k in ipairs(grp.members) do
+                local p = ns.db.people[k] or { rev = {}, prof = {} }
+                if Online(k) then grp.onlineCount = grp.onlineCount + 1 end
+                if Passes(k, p, text) then
+                    grp.shown[#grp.shown + 1] = k
+                end
+            end
+            if g ~= mine then
+                friends = friends + 1
+                if grp.onlineCount > 0 then friendsOnline = friendsOnline + 1 end
+            end
+            chars = chars + #grp.members
+            -- Name: you, or the friend's character that is online or was seen last.
+            local rep = grp.members[1]
+            for _, k in ipairs(grp.members) do
+                local p, r = ns.db.people[k], ns.db.people[rep]
+                if Online(k) and not Online(rep) then
+                    rep = k
+                elseif Online(k) == Online(rep) and p and r and not p.via and ((p.seen or 0) > (r.seen or 0) or r.via) then
+                    rep = k
+                end
+            end
+            grp.rep = rep
+            grp.label = g == mine and "You" or ns.ShortName(rep)
+            if #grp.shown > 0 then
+                rows[#rows + 1] = grp
+            end
         end
         for key in pairs(ns.db.hidden) do
-            if ns.db.people[key] or ns.db.crew[key] then
-                hiddenCount = hiddenCount + 1
+            local found = ns.db.people[key] or ns.db.crew[key]
+            if not found and key:sub(1, 1) == "#" then
+                for k in pairs(ns.db.people) do
+                    if ns.GroupOf(k) == key then found = true end
+                end
             end
+            if found then hiddenCount = hiddenCount + 1 end
         end
         if hiddenCount == 0 then
             self.showHidden = false
@@ -703,64 +953,142 @@ local function BuildCrewPage()
         self.hiddenButton:SetShown(hiddenCount > 0)
         self.hiddenButton:SetText(self.showHidden and "Hide them again" or ("Show hidden (" .. hiddenCount .. ")"))
 
-        -- You first, then your alts, then friends online, then the rest.
-        local function Rank(key)
-            local p = ns.db.people[key]
-            if key == ns.me then return 0 end
-            if p and p.mine then return 1 end
-            if ns.online[key] then return 2 end
-            return 3
-        end
-        local keys = ns.VisiblePeople(self.showHidden)
-        table.sort(keys, function(a, b)
-            local ra, rb = Rank(a), Rank(b)
-            if ra ~= rb then return ra < rb end
-            return a < b
+        table.sort(rows, function(a, b)
+            if a.key == mine then return true end
+            if b.key == mine then return false end
+            return Before(a.members, a.label, b.members, b.label, a.onlineCount > 0, b.onlineCount > 0)
         end)
-        local items = {}
-        for _, key in ipairs(keys) do
-            local p = ns.db.people[key] or { rev = {}, prof = {} }
-            if Matches(key, p, text) then
-                local hidden = ns.db.hidden[key] == true
+
+        local function CharItem(k, child, group)
+            local p = ns.db.people[k] or { rev = {}, prof = {} }
+            local item = {
+                key = k,
+                person = p,
+                child = child,
+                online = Online(k),
+                hidden = ns.IsHidden(k),
+                class = p.class,
+                faction = p.faction,
+                other = Other(p),
+                level = p.level,
+                gold = p.money,
+                profs = p.prof,
+                name = ns.LongName(k) .. (ns.IsHidden(k) and " (hidden)" or ""),
+            }
+            if k ~= ns.me then
+                if ns.db.hidden[k] then
+                    item.hint = "Right-click to show again."
+                elseif ns.IsHidden(k) then
+                    item.hint = "Hidden with " .. group.label .. ". Right-click their line to show them again."
+                else
+                    item.hint = "Right-click to hide (asks first)."
+                end
+            end
+            item.tooltip = function(tt) CrewTooltip(tt, item) end
+            item.onClick = function(button)
+                if button ~= "RightButton" or k == ns.me then
+                    return
+                end
+                GameTooltip:Hide()
+                if ns.db.hidden[k] then
+                    ns.SetHidden(k, false)
+                elseif not ns.IsHidden(k) then
+                    AskToHide(k)
+                end
+            end
+            return item
+        end
+
+        local items, anyHint = {}, false
+        for _, grp in ipairs(rows) do
+            local shown = grp.shown
+            table.sort(shown, function(a, b)
+                if a == ns.me then return true end
+                if b == ns.me then return false end
+                return Before({ a }, ns.LongName(a), { b }, ns.LongName(b), Online(a), Online(b))
+            end)
+            for _, k in ipairs(shown) do
+                local p = ns.db.people[k]
+                for _, e in ipairs(p and p.prof or {}) do
+                    if ns.TrainerNow(e, p.level) then anyHint = true end
+                end
+            end
+            if #grp.members == 1 then
+                items[#items + 1] = CharItem(grp.members[1], false, grp)
+            else
+                local open = view.open[grp.key]
+                if open == nil then open = grp.key == mine end
+                if text ~= "" or page.prof or view.onlineOnly then open = true end
+                local profs, holders = BestProfs(grp.members)
+                local allOther = true
+                for _, k in ipairs(grp.members) do
+                    if not Other(ns.db.people[k] or {}) then allOther = false end
+                end
+                local rep = ns.db.people[grp.rep] or {}
+                local hidden = ns.db.hidden[grp.key] == true
                 local item = {
-                    key = key,
-                    person = p,
-                    online = key ~= ns.me and ns.online[key] == true,
+                    key = grp.key,
+                    group = true,
+                    open = open,
+                    size = #grp.members,
+                    onlineCount = grp.onlineCount,
+                    online = grp.onlineCount > 0,
                     hidden = hidden,
-                    name = ns.LongName(key) .. (hidden and " (hidden)" or ""),
+                    class = rep.class,
+                    faction = rep.faction,
+                    other = allOther,
+                    level = MaxLevel(grp.members),
+                    gold = Sum(grp.members, "money"),
+                    profs = profs,
+                    holders = holders,
+                    name = grp.label .. "  " .. INK_DIM_HEX .. "(" .. #grp.members .. ")|r" .. (hidden and " (hidden)" or ""),
                 }
-                item.tooltip = function(tt) CrewTooltip(tt, item) end
-                if key ~= ns.me then
-                    item.onClick = function(button)
-                        if button ~= "RightButton" then
+                if grp.key == mine then
+                    item.hint = "Click to open or close."
+                else
+                    item.hint = hidden and "Click to open or close. Right-click to show again."
+                        or "Click to open or close. Right-click to hide (asks first)."
+                end
+                item.tooltip = function(tt)
+                    GroupTooltip(tt, { name = grp.label, size = item.size, onlineCount = item.onlineCount, gold = item.gold, profs = profs, hint = item.hint })
+                end
+                item.onClick = function(button)
+                    GameTooltip:Hide()
+                    if button == "RightButton" then
+                        if grp.key == mine then
                             return
-                        end
-                        GameTooltip:Hide()
-                        if ns.db.hidden[key] then
-                            ns.SetHidden(key, false)
-                            page:Refresh()
+                        elseif hidden then
+                            ns.SetHidden(grp.key, false)
                         else
-                            AskToHide(key)
+                            AskToHide(grp.key, grp.label)
                         end
+                        return
                     end
+                    view.open[grp.key] = not open
+                    page:Refresh()
                 end
                 items[#items + 1] = item
+                if open then
+                    for _, k in ipairs(shown) do
+                        items[#items + 1] = CharItem(k, true, grp)
+                    end
+                end
             end
         end
-        local anyHint = false
-        for _, item in ipairs(items) do
-            for _, e in ipairs(item.person.prof or {}) do
-                if ns.TrainerNow(e, item.person.level) then anyHint = true end
-            end
+
+        for _, h in ipairs(self.headers) do
+            local on = h.sortKey and h.sortKey == view.sort
+            local c = on and { 1, 1, 1 } or GOLD
+            h.label:SetTextColor(c[1], c[2], c[3])
         end
-        self.legend:SetShown(anyHint)
+
         if friends == 0 then
-            self.status:SetText("No friends yet. Friends (press O) who have FriendsCraft show up here.")
+            self.status:SetText("No friends yet. Friends (press O) who have FriendsCraft show up here by themselves.")
         elseif #items == 0 then
-            self.status:SetText("Nobody matches that filter.")
+            self.status:SetText("Nobody matches these filters.")
         else
-            self.status:SetText(string.format("%d friend%s, %d online. Hover an icon for details.",
-                friends, friends == 1 and "" or "s", online))
+            self.status:SetText(string.format("%d friend%s (%d online), %d characters.%s", friends, friends == 1 and "" or "s",
+                friendsOnline, chars, anyHint and "  ! = can learn the next rank at a trainer" or ""))
         end
         self.list:SetItems(items)
     end
@@ -768,7 +1096,7 @@ local function BuildCrewPage()
 end
 
 -------------------------------------------------------------------------------
--- Recipes
+-- Recipes: professions on the left, that profession's recipes on the right.
 -------------------------------------------------------------------------------
 
 local function ReagentTooltip(tt, e)
@@ -790,46 +1118,6 @@ local function ReagentTooltip(tt, e)
     end
 end
 
--- One list on the right page only, turned with the arrows.
-local function RightList(page)
-    local list = { items = {}, spread = 0, rows = {}, single = true }
-    list.perSpread = math.floor(LIST_H / ROW_H)
-    for i = 1, list.perSpread do
-        local row = CreateFrame("Button", nil, page.right)
-        row:SetSize(CONTENT_W, ROW_H)
-        row:SetPoint("TOPLEFT", 0, -(LIST_TOP + (i - 1) * ROW_H))
-        row.text = Ink(row, "GameFontHighlight")
-        row.text:SetPoint("LEFT", 2, 0)
-        row.text:SetPoint("RIGHT", -2, 0)
-        row.text:SetWordWrap(false)
-        row.item = false
-        RowScripts(row)
-        list.rows[i] = row
-    end
-    function list:Draw()
-        local first = self.spread * self.perSpread
-        for i, row in ipairs(self.rows) do
-            local item = self.items[first + i]
-            row.item = item or false
-            if item then
-                row.text:SetText(item.text or "")
-                row:Show()
-            else
-                row:Hide()
-            end
-        end
-        UpdateFooter(self)
-    end
-    function list:SetItems(items)
-        self.items = items
-        local last = math.max(0, math.ceil(#items / self.perSpread) - 1)
-        self.spread = math.min(self.spread, last)
-        self:Draw()
-    end
-    page.list = list
-    return list
-end
-
 -- Icon for a profession name, from anyone who shares it.
 local function ProfIconByName(name)
     for _, key in ipairs(ns.VisiblePeople()) do
@@ -845,26 +1133,26 @@ end
 
 local function IndexRow(parent, onClick)
     local row = CreateFrame("Button", nil, parent)
-    row:SetSize(CONTENT_W, INDEX_H)
+    row:SetSize(INDEX_W, 24)
     local hl = row:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(0.45, 0.30, 0.10, 0.15)
+    hl:SetColorTexture(1, 1, 1, 0.08)
     -- The chosen profession gets a shaded bar and a mark on the left,
     -- so it is not shown by color alone.
     row.chosen = row:CreateTexture(nil, "BACKGROUND")
     row.chosen:SetAllPoints()
-    row.chosen:SetColorTexture(0.45, 0.30, 0.10, 0.22)
+    row.chosen:SetColorTexture(1, 0.82, 0, 0.15)
     row.bar = row:CreateTexture(nil, "ARTWORK")
-    row.bar:SetSize(3, INDEX_H)
+    row.bar:SetSize(3, 24)
     row.bar:SetPoint("LEFT")
-    row.bar:SetColorTexture(INK[1], INK[2], INK[3], 1)
+    row.bar:SetColorTexture(1, 0.82, 0, 1)
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(18, 18)
     row.icon:SetPoint("LEFT", 8, 0)
     row.name = Ink(row, "GameFontHighlight")
     row.name:SetPoint("LEFT", 32, 0)
     row.count = Ink(row, "GameFontHighlight", "", INK_DIM)
-    row.count:SetPoint("RIGHT", -4, 0)
+    row.count:SetPoint("RIGHT", -6, 0)
     row.count:SetJustifyH("RIGHT")
     row.prof = false
     row:SetScript("OnClick", function(self)
@@ -876,31 +1164,40 @@ local function IndexRow(parent, onClick)
 end
 
 local function BuildRecipesPage()
-    local page = NewPage("recipes", "Recipes", "Recipes")
-    page.search = Input(page.left, CONTENT_W, "Search all recipes, e.g. bandage")
-    page.search:SetPoint("TOPLEFT", 0, CONTROLS_Y)
+    local page = NewPage("recipes")
+    page.search = Input(page.frame, INDEX_W - 8, "Search all recipes")
+    page.search:SetPoint("TOPLEFT", 8, -4)
     page.search:SetScript("OnTextChanged", function(self)
         self.UpdateHint()
-        page.list.spread = 0
+        page.list.offset = 0
         page:Refresh()
     end)
+    page.heading = Ink(page.frame, "GameFontNormal", "", GOLD)
+    page.heading:SetPoint("TOPLEFT", INDEX_W + 16, -8)
     page.status = Status(page)
-    RightList(page)
+    page.list = ScrollList(page.frame, ROW_H, TextRow, FillTextRow)
+    page.list.frame:SetPoint("TOPLEFT", INDEX_W + 12, -32)
+    page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
 
     local function Choose(prof)
         page.chosen = prof
         page.search:SetText("")
         page.search:ClearFocus()
         page.search.UpdateHint()
-        page.list.spread = 0
+        page.list.offset = 0
         page:Refresh()
     end
     page.index = {}
-    for i = 1, math.floor(LIST_H / INDEX_H) do
-        local row = IndexRow(page.left, Choose)
-        row:SetPoint("TOPLEFT", 0, -(LIST_TOP + (i - 1) * INDEX_H))
+    for i = 1, 16 do
+        local row = IndexRow(page.frame, Choose)
+        row:SetPoint("TOPLEFT", 0, -32 - (i - 1) * 24)
         page.index[i] = row
     end
+    local divider = page.frame:CreateTexture(nil, "ARTWORK")
+    divider:SetPoint("TOPLEFT", INDEX_W + 4, -32)
+    divider:SetPoint("BOTTOMLEFT", INDEX_W + 4, 22)
+    divider:SetWidth(1)
+    divider:SetColorTexture(1, 0.82, 0, 0.25)
 
     -- "Tom, Mira" for the others who can make it; your own name is left out
     -- (hover shows everyone).
@@ -917,7 +1214,6 @@ local function BuildRecipesPage()
     function page:Refresh()
         local text = strtrim(self.search:GetText() or ""):lower()
         local all = ns.AllRecipes()
-        -- Group by profession.
         local groups, order = {}, {}
         for _, e in ipairs(all) do
             local prof = e.crafters[1] and e.crafters[1].prof or "?"
@@ -956,10 +1252,10 @@ local function BuildRecipesPage()
                     source[#source + 1] = e
                 end
             end
-            self.right.heading:SetText("Search results")
+            self.heading:SetText("Search results")
         else
             source = groups[self.chosen] or {}
-            self.right.heading:SetText(self.chosen or "Recipes")
+            self.heading:SetText(self.chosen or "Recipes")
         end
         local items = {}
         for _, e in ipairs(source) do
@@ -985,14 +1281,14 @@ end
 -------------------------------------------------------------------------------
 
 local function BuildShopPage()
-    local page = NewPage("shop", "Shopping list")
-    local addW, countW = 52, 74
-    page.item = Input(page.left, CONTENT_W - addW - countW - 8, "Item, or shift-click")
-    page.item:SetPoint("TOPLEFT", 0, CONTROLS_Y)
-    page.count = Input(page.left, countW, "How many")
-    page.count:SetPoint("LEFT", page.item, "RIGHT", 4, 0)
+    local page = NewPage("shop")
+    local addW, countW = 60, 80
+    page.item = Input(page.frame, 260, "Item name, or shift-click it")
+    page.item:SetPoint("TOPLEFT", 8, -4)
+    page.count = Input(page.frame, countW, "How many")
+    page.count:SetPoint("LEFT", page.item, "RIGHT", 10, 0)
     page.count:SetNumeric(true)
-    local add = Button(page.left, "Add", addW, function()
+    local add = Button(page.frame, "Add", addW, function()
         local id = ns.FindItem(strtrim(page.item:GetText() or ""))
         local count = tonumber(page.count:GetText()) or 1
         if not id then
@@ -1007,13 +1303,15 @@ local function BuildShopPage()
         page.item.UpdateHint()
         page.count.UpdateHint()
     end)
-    add:SetPoint("LEFT", page.count, "RIGHT", 4, 0)
+    add:SetPoint("LEFT", page.count, "RIGHT", 8, 0)
     page.item:SetScript("OnEnterPressed", function() page.count:SetFocus() end)
     page.count:SetScript("OnEnterPressed", function() add:Click() end)
     page.item:SetScript("OnTextChanged", function(self) self.UpdateHint() end)
     page.count:SetScript("OnTextChanged", function(self) self.UpdateHint() end)
     page.status = Status(page)
-    FlowList(page)
+    page.list = ScrollList(page.frame, ROW_H, TextRow, FillTextRow)
+    page.list.frame:SetPoint("TOPLEFT", 0, -32)
+    page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
     ns.shopItemBox = page.item
 
     function page:Refresh()
@@ -1086,16 +1384,18 @@ end
 -------------------------------------------------------------------------------
 
 local function BuildFindPage()
-    local page = NewPage("find", "Who has it")
-    page.search = Input(page.left, CONTENT_W, "Search items, e.g. linen")
-    page.search:SetPoint("TOPLEFT", 0, CONTROLS_Y)
+    local page = NewPage("find")
+    page.search = Input(page.frame, 260, "Search items, e.g. linen")
+    page.search:SetPoint("TOPLEFT", 8, -4)
     page.search:SetScript("OnTextChanged", function(self)
         self.UpdateHint()
-        page.list.spread = 0
+        page.list.offset = 0
         page:Refresh()
     end)
     page.status = Status(page)
-    FlowList(page)
+    page.list = ScrollList(page.frame, ROW_H, TextRow, FillTextRow)
+    page.list.frame:SetPoint("TOPLEFT", 0, -32)
+    page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
 
     function page:Refresh()
         local text = strtrim(self.search:GetText() or ""):lower()
@@ -1140,68 +1440,64 @@ end
 -------------------------------------------------------------------------------
 
 local function Checkbox(parent, label, note, get, set)
-    local ok, b = pcall(CreateFrame, "CheckButton", nil, parent, "UICheckButtonTemplate")
-    if not ok or not b then
-        b = CreateFrame("CheckButton", nil, parent)
-        b:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
-        b:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
-        b:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
-        b:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
-    end
+    local b = CheckButton(parent)
     b:SetSize(26, 26)
     b.label = Ink(b, "GameFontHighlight", label)
     b.label:SetPoint("LEFT", b, "RIGHT", 4, 1)
     b.note = Ink(b, "GameFontHighlightSmall", note, INK_DIM)
     b.note:SetPoint("TOPLEFT", b.label, "BOTTOMLEFT", 0, -3)
-    b.note:SetWidth(CONTENT_W - 32)
+    b.note:SetWidth(300)
     b.note:SetWordWrap(true)
     b:SetScript("OnClick", function(self)
-        set(self:GetChecked() and true or false)
-        if PlaySound and SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
-            pcall(PlaySound, self:GetChecked() and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
-        end
+        local on = self:GetChecked() and true or false
+        set(on)
+        CheckSound(on)
     end)
     b.Sync = function() b:SetChecked(get() and true or false) end
     return b
 end
 
 local function BuildSettingsPage()
-    local page = NewPage("settings", "Settings", "Good to know")
+    local page = NewPage("settings")
+    local heading = Ink(page.frame, "GameFontNormal", "Settings", GOLD)
+    heading:SetPoint("TOPLEFT", 8, -8)
     page.boxes = {
-        Checkbox(page.left, "Minimap button", "The book button on the minimap. Without it, type /fc to open the book.",
+        Checkbox(page.frame, "Minimap button", "The FriendsCraft button on the minimap. Without it, type /fc to open the window.",
             function() return not ns.db.minimap.hide end,
             function(on)
                 ns.db.minimap.hide = not on
                 ns.UpdateMinimapButton()
             end),
-        Checkbox(page.left, "Crew lines on item tooltips", "\"Crew has\", \"needs\" and \"can make it\" when you hover an item.",
+        Checkbox(page.frame, "Crew lines on item tooltips", "\"Crew has\", \"needs\" and \"can make it\" when you hover an item.",
             function() return ns.db.tooltips end,
             function(on) ns.db.tooltips = on end),
     }
     for i, b in ipairs(page.boxes) do
-        b:SetPoint("TOPLEFT", 0, CONTROLS_Y - (i - 1) * 56)
+        b:SetPoint("TOPLEFT", 8, -32 - (i - 1) * 60)
     end
     local version = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
         or (GetAddOnMetadata and GetAddOnMetadata(ADDON_NAME, "Version"))
     if type(version) == "string" and version ~= "" then
-        local v = Ink(page.left, "GameFontHighlightSmall", "FriendsCraft " .. version, INK_DIM)
-        v:SetPoint("TOPLEFT", 0, -(LIST_TOP + LIST_H))
+        local v = Ink(page.frame, "GameFontHighlightSmall", "FriendsCraft " .. version, INK_DIM)
+        v:SetPoint("BOTTOMLEFT", 8, 4)
     end
-    local notes = Ink(page.right, "GameFontHighlight", table.concat({
+    local notesHeading = Ink(page.frame, "GameFontNormal", "Good to know", GOLD)
+    notesHeading:SetPoint("TOPLEFT", 380, -8)
+    local notes = Ink(page.frame, "GameFontHighlight", table.concat({
+        "A friend's other characters show up by themselves once that friend logs in on any of them.",
         "Hidden people: on the Crew page, click \"Show hidden\" to see them and right-click to bring them back.",
         "Recipes: open each profession window once so your recipes are shared.",
         "Bank: updates when you visit a bank.",
-        "Type /fc to open the book from anywhere.",
+        "Type /fc to open the window from anywhere. Drag the corner to make it bigger.",
     }, "\n\n"), INK)
-    notes:SetPoint("TOPLEFT", 0, CONTROLS_Y)
-    notes:SetWidth(CONTENT_W)
+    notes:SetPoint("TOPLEFT", 380, -32)
+    notes:SetPoint("RIGHT", -16, 0)
     notes:SetWordWrap(true)
 
     function page:Refresh()
         for _, b in ipairs(self.boxes) do
             b.Sync()
         end
-        UpdateFooter(nil)
     end
     return page
 end
@@ -1209,6 +1505,16 @@ end
 -------------------------------------------------------------------------------
 -- Window and tabs
 -------------------------------------------------------------------------------
+
+local TAB_NAMES = {}
+
+local function SetWindowTitle(text)
+    if window.SetTitle then
+        pcall(window.SetTitle, window, text)
+    elseif type(window.fcTitle) == "table" then
+        window.fcTitle:SetText(text)
+    end
+end
 
 local function ShowTab(name)
     currentTab = name
@@ -1219,15 +1525,17 @@ local function ShowTab(name)
         -- The open tab gets the glowing frame.
         t.selected:SetShown(t.key == name)
     end
+    SetWindowTitle("FriendsCraft: " .. (TAB_NAMES[name] or ""))
     ns.RefreshUI(true)
 end
 
--- A square icon tab on the left side of the book, like the game's own
+-- A square icon tab on the left side of the window, like the game's own
 -- side tabs. Hover shows its name.
 local function Tab(key, text, icon)
     local b = CreateFrame("Button", nil, window)
     b.key = key
     b.tabName = text
+    TAB_NAMES[key] = text
     b:SetSize(43, 55)
     b:SetScale(0.8) -- a bit smaller than the game's own side tabs
     local useAtlas = AtlasInfo(ART.tab) and AtlasInfo(ART.tabSelected)
@@ -1278,27 +1586,101 @@ local function Tab(key, text, icon)
     return b
 end
 
-local function BuildWindow()
-    Layout()
-    window = CreateFrame("Frame", "FriendsCraftFrame", UIParent)
-    window:SetSize(PW * 2, HEAD_H + PAGE_H)
-    window:SetPoint("CENTER")
-    window:SetFrameStrata("DIALOG")
-    window:SetToplevel(true)
-    window:EnableMouse(true)
-    window:SetMovable(true)
-    window:SetClampedToScreen(true)
-    window:SetClampRectInsets(48, -36, 0, 0) -- keep the side tabs and close button on screen
-    window:RegisterForDrag("LeftButton")
-    window:SetScript("OnDragStart", window.StartMoving)
-    window:SetScript("OnDragStop", window.StopMovingOrSizing)
-    window:Hide()
-    tinsert(UISpecialFrames, "FriendsCraftFrame") -- Escape closes it
-    BuildArt()
+local function SavePlace()
+    local point, _, relPoint, x, y = window:GetPoint()
+    local w, h = window:GetWidth(), window:GetHeight()
+    if point and type(w) == "number" then
+        ns.db.window = { point = point, relPoint = relPoint, x = x, y = y, w = w, h = h }
+    end
+end
 
-    -- Close button just outside the top right corner of the book.
-    local close = CreateFrame("Button", nil, window, "UIPanelCloseButton")
-    close:SetPoint("TOPLEFT", window, "TOPRIGHT", 4, -2)
+local function BuildWindow()
+    -- The game's own panel with a round portrait, or a plain dark panel.
+    local ok, f = pcall(CreateFrame, "Frame", "FriendsCraftFrame", UIParent, "ButtonFrameTemplate")
+    local framed = ok and f
+    if not framed then
+        f = CreateFrame("Frame", "FriendsCraftFrame", UIParent, "BackdropTemplate")
+        if f.SetBackdrop then
+            f:SetBackdrop({
+                bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+                edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+                tile = true, tileSize = 32, edgeSize = 32,
+                insets = { left = 11, right = 12, top = 12, bottom = 11 },
+            })
+        end
+        local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT", -4, -4)
+        f.fcTitle = Ink(f, "GameFontNormal", "FriendsCraft", GOLD)
+        f.fcTitle:SetPoint("TOP", 0, -16)
+    end
+    window = f
+    local place = ns.db.window or {}
+    local function Clamp(v, lo, hi, default)
+        v = tonumber(v) or default
+        return math.max(lo, math.min(hi, v))
+    end
+    f:SetSize(Clamp(place.w, MIN_W, MAX_W, DEFAULT_W), Clamp(place.h, MIN_H, MAX_H, DEFAULT_H))
+    if place.point then
+        f:SetPoint(place.point, UIParent, place.relPoint or place.point, tonumber(place.x) or 0, tonumber(place.y) or 0)
+    else
+        f:SetPoint("CENTER")
+    end
+    f:SetFrameStrata("HIGH")
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:SetClampedToScreen(true)
+    f:SetClampRectInsets(48, 0, 0, 0) -- keep the side tabs on screen
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        SavePlace()
+    end)
+    f:Hide()
+    tinsert(UISpecialFrames, "FriendsCraftFrame") -- Escape closes it
+
+    if framed then
+        if ButtonFrameTemplate_HideButtonBar then
+            pcall(ButtonFrameTemplate_HideButtonBar, f)
+        end
+        if f.SetPortraitToAsset then
+            pcall(f.SetPortraitToAsset, f, ICON)
+        elseif type(f.portrait) == "table" and SetPortraitToTexture then
+            pcall(SetPortraitToTexture, f.portrait, ICON)
+        end
+    end
+
+    -- Drag the bottom right corner to resize.
+    f:SetResizable(true)
+    if f.SetResizeBounds then
+        f:SetResizeBounds(MIN_W, MIN_H, MAX_W, MAX_H)
+    elseif f.SetMinResize then
+        f:SetMinResize(MIN_W, MIN_H)
+        f:SetMaxResize(MAX_W, MAX_H)
+    end
+    local grip = CreateFrame("Button", nil, f)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", -3, 3)
+    grip:SetFrameLevel(f:GetFrameLevel() + 20)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
+    grip:SetScript("OnMouseUp", function()
+        f:StopMovingOrSizing()
+        SavePlace()
+        ns.RefreshUI(true)
+    end)
+
+    content = CreateFrame("Frame", nil, f)
+    if framed and type(f.Inset) == "table" then
+        content:SetPoint("TOPLEFT", f.Inset, "TOPLEFT", 6, -6)
+        content:SetPoint("BOTTOMRIGHT", f.Inset, "BOTTOMRIGHT", -6, 6)
+    else
+        content:SetPoint("TOPLEFT", 16, -40)
+        content:SetPoint("BOTTOMRIGHT", -16, 16)
+    end
 
     tabs = {}
     local defs = {
@@ -1310,35 +1692,24 @@ local function BuildWindow()
     }
     for i, d in ipairs(defs) do
         local b = Tab(d.key, d.text, d.icon)
-        b:SetPoint("TOPRIGHT", window, "TOPLEFT", 0, -24 - (i - 1) * 52)
+        b:SetPoint("TOPRIGHT", window, "TOPLEFT", 0, -90 - (i - 1) * 52)
         tabs[i] = b
     end
-
-    prevButton = Arrow(-1, function() TurnPage(-1) end)
-    prevButton:SetPoint("BOTTOMLEFT", INSET_X, 14)
-    nextButton = Arrow(1, function() TurnPage(1) end)
-    nextButton:SetPoint("BOTTOMRIGHT", -INSET_X, 14)
-    prevButton:SetFrameLevel(window:GetFrameLevel() + 10)
-    nextButton:SetFrameLevel(window:GetFrameLevel() + 10)
-    leftNumber = Ink(window, "GameFontHighlightSmall", "", INK_DIM)
-    leftNumber:SetPoint("BOTTOM", window, "BOTTOMLEFT", PW / 2, 22)
-    rightNumber = Ink(window, "GameFontHighlightSmall", "", INK_DIM)
-    rightNumber:SetPoint("BOTTOM", window, "BOTTOMLEFT", PW * 1.5, 22)
 
     BuildCrewPage()
     BuildRecipesPage()
     BuildShopPage()
     BuildFindPage()
     BuildSettingsPage()
-    window:SetScript("OnShow", function()
-        if PlaySound and SOUNDKIT and SOUNDKIT.IG_SPELLBOOK_OPEN then
-            pcall(PlaySound, SOUNDKIT.IG_SPELLBOOK_OPEN)
+    f:SetScript("OnShow", function()
+        if PlaySound and SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_OPEN then
+            pcall(PlaySound, SOUNDKIT.IG_CHARACTER_INFO_OPEN)
         end
         ns.RefreshUI(true)
     end)
-    window:SetScript("OnHide", function()
-        if PlaySound and SOUNDKIT and SOUNDKIT.IG_SPELLBOOK_CLOSE then
-            pcall(PlaySound, SOUNDKIT.IG_SPELLBOOK_CLOSE)
+    f:SetScript("OnHide", function()
+        if PlaySound and SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_CLOSE then
+            pcall(PlaySound, SOUNDKIT.IG_CHARACTER_INFO_CLOSE)
         end
     end)
     ShowTab("crew")
