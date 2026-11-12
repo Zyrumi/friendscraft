@@ -19,6 +19,8 @@ local LEVEL_W = 44
 local GOLD_W = 96
 local SLOT_W = 50           -- one profession icon with its skill
 local MAX_SLOTS = 12
+local BASE_SCALE = 1.15     -- text and rows at the default window height
+local MAX_SCALE = 1.9       -- taller windows grow the text up to this
 local INDEX_W = 190         -- recipes: profession list
 local ICON = "Interface\\Icons\\INV_Relics_LibramOfHope"
 
@@ -602,6 +604,9 @@ local function CrewTooltip(tt, item)
     end
     if not p.prof or #p.prof == 0 then
         tt:AddLine("No professions shared yet", 0.8, 0.8, 0.8)
+    end
+    if not p.faction then
+        tt:AddLine("Faction not known yet: it shows after this character's next login with FriendsCraft 0.3 or newer.", 0.8, 0.8, 0.8, true)
     end
     if item.hint then
         tt:AddLine(item.hint, 1, 0.82, 0, true)
@@ -1674,6 +1679,20 @@ local function BuildWindow()
     end)
 
     content = CreateFrame("Frame", nil, f)
+    -- Everything inside grows with the window's height (wider windows
+    -- show more professions instead).
+    local function ApplyScale()
+        local h = f:GetHeight()
+        if type(h) ~= "number" or h <= 0 then
+            h = DEFAULT_H
+        end
+        content:SetScale(BASE_SCALE * math.max(1, math.min(MAX_SCALE / BASE_SCALE, h / DEFAULT_H)))
+    end
+    ApplyScale()
+    f:SetScript("OnSizeChanged", function()
+        ApplyScale()
+        ns.RefreshUI()
+    end)
     if framed and type(f.Inset) == "table" then
         content:SetPoint("TOPLEFT", f.Inset, "TOPLEFT", 6, -6)
         content:SetPoint("BOTTOMRIGHT", f.Inset, "BOTTOMRIGHT", -6, 6)
