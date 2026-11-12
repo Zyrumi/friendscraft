@@ -19,6 +19,14 @@ local LEVEL_W = 44
 local GOLD_W = 96
 local SLOT_W = 50           -- one profession icon with its skill
 local MAX_SLOTS = 12
+-- Secondary professions get fixed columns, so they line up on every row.
+local SECONDARY = {
+    { line = 185, name = "Cooking", icon = "Interface\\Icons\\INV_Misc_Food_15" },
+    { line = 129, name = "First Aid", icon = "Interface\\Icons\\Spell_Holy_SealOfSacrifice" },
+    { line = 356, name = "Fishing", icon = "Interface\\Icons\\Trade_Fishing" },
+}
+local SEC_X = NAME_W + LEVEL_W + GOLD_W + 16
+local PRIM_X = SEC_X + #SECONDARY * SLOT_W + 12
 local BASE_SCALE = 1.15     -- text and rows at the default window height
 local MAX_SCALE = 1.9       -- taller windows grow the text up to this
 local INDEX_W = 190         -- recipes: profession list
@@ -495,12 +503,10 @@ local function CrewRow(parent)
     row.gold:SetJustifyH("RIGHT")
     row.gold:SetPoint("LEFT", NAME_W + LEVEL_W, 0)
     row.gold:SetWidth(GOLD_W)
-    row.slots = {}
-    local profX = NAME_W + LEVEL_W + GOLD_W + 16
-    for i = 1, MAX_SLOTS do
+    local function Slot(x)
         local s = CreateFrame("Button", nil, row)
         s:SetSize(18, 18)
-        s:SetPoint("LEFT", profX + (i - 1) * SLOT_W, 0)
+        s:SetPoint("LEFT", x, 0)
         s.entry, s.person, s.holders = false, false, false
         s.icon = s:CreateTexture(nil, "ARTWORK")
         s.icon:SetAllPoints()
@@ -517,9 +523,39 @@ local function CrewRow(parent)
                 row.item.onClick(button or "LeftButton")
             end
         end)
-        row.slots[i] = s
+        return s
+    end
+    row.sec = {}
+    for i = 1, #SECONDARY do
+        row.sec[i] = Slot(SEC_X + (i - 1) * SLOT_W)
+    end
+    row.slots = {}
+    for i = 1, MAX_SLOTS do
+        row.slots[i] = Slot(PRIM_X + (i - 1) * SLOT_W)
     end
     return row
+end
+
+local function SecondaryIndex(e)
+    for i, sec in ipairs(SECONDARY) do
+        if e.line == sec.line or e.name == sec.name then
+            return i
+        end
+    end
+    return nil
+end
+
+local function FillSlot(s, e, item, text)
+    s.entry, s.person, s.key = e or false, item.person or false, item.key
+    s.holders = item.holders and e and item.holders[e.name] or false
+    if not e then
+        s:Hide()
+        return
+    end
+    s.icon:SetTexture(ns.ProfIcon(e))
+    s.num:SetText(text or e.rank)
+    s.mark:SetShown(not text and not item.group and ns.TrainerNow(e, item.person and item.person.level))
+    s:Show()
 end
 
 local function FillCrewRow(row, item)
@@ -553,29 +589,28 @@ local function FillCrewRow(row, item)
     end
     row.level:SetText(item.level and item.level > 0 and item.level or "")
     row.gold:SetText(item.gold and item.gold > 0 and MoneyText(item.gold) or "")
+    -- Secondary professions in their own columns, the rest after them.
+    local sec, primary = {}, {}
+    for _, e in ipairs(item.profs or {}) do
+        local i = SecondaryIndex(e)
+        if i then
+            sec[i] = e
+        else
+            primary[#primary + 1] = e
+        end
+    end
+    for i, s in ipairs(row.sec) do
+        FillSlot(s, sec[i], item)
+    end
     local width = row:GetWidth()
     local fit = MAX_SLOTS
     if type(width) == "number" and width > 0 then
-        fit = math.max(1, math.floor((width - (NAME_W + LEVEL_W + GOLD_W + 16)) / SLOT_W))
+        fit = math.max(1, math.floor((width - PRIM_X) / SLOT_W))
     end
-    local profs = item.profs or {}
     for i, s in ipairs(row.slots) do
-        local e = profs[i]
-        s.entry, s.person, s.key = e or false, item.person or false, item.key
-        s.holders = item.holders and e and item.holders[e.name] or false
-        if e and i <= fit then
-            s.icon:SetTexture(ns.ProfIcon(e))
-            if i == fit and #profs > fit then
-                s.num:SetText("+" .. (#profs - fit + 1))
-                s.mark:Hide()
-            else
-                s.num:SetText(e.rank)
-                s.mark:SetShown(not item.group and ns.TrainerNow(e, item.person and item.person.level))
-            end
-            s:Show()
-        else
-            s:Hide()
-        end
+        local e = i <= fit and primary[i] or nil
+        local more = e and i == fit and #primary > fit and ("+" .. (#primary - fit + 1)) or nil
+        FillSlot(s, e, item, more)
     end
 end
 
@@ -786,7 +821,24 @@ local function BuildCrewPage()
     local goldHeader = Header("Gold", NAME_W + LEVEL_W, GOLD_W, "gold")
     goldHeader.label:ClearAllPoints()
     goldHeader.label:SetPoint("RIGHT", -2, 0)
-    Header("Professions", NAME_W + LEVEL_W + GOLD_W + 16, 120)
+    -- One icon per secondary profession column (hover for its name).
+    for i, sec in ipairs(SECONDARY) do
+        local b = CreateFrame("Button", nil, header)
+        b:SetSize(16, 16)
+        b:SetPoint("LEFT", SEC_X + 1 + (i - 1) * SLOT_W, 0)
+        local icon = b:CreateTexture(nil, "ARTWORK")
+        icon:SetAllPoints()
+        if not UseFile(icon, sec.icon) then
+            icon:SetTexture(134400)
+        end
+        b:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(sec.name, 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+    Header("Professions", PRIM_X, 120)
 
     page.list = ScrollList(page.frame, ROW_H, CrewRow, FillCrewRow)
     page.list.frame:SetPoint("TOPLEFT", 0, -54)
