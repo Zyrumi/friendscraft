@@ -708,8 +708,12 @@ function ns.KnownItemIDs()
     return list
 end
 
--- Who holds an item: { { key, bags, bank }, ... } most first.
+-- Who holds an item: { { key, bags, bank }, ... } most first. (do not change it)
 function ns.Holders(itemID)
+    cache.holders = cache.holders or {}
+    if cache.holders[itemID] then
+        return cache.holders[itemID]
+    end
     local list = {}
     for _, key in ipairs(ns.VisiblePeople()) do
         local p = ns.db.people[key]
@@ -719,11 +723,16 @@ function ns.Holders(itemID)
         end
     end
     table.sort(list, function(a, b) return a.bags + a.bank > b.bags + b.bank end)
+    cache.holders[itemID] = list
     return list
 end
 
--- Who needs an item: { { key, count, have }, ... }
+-- Who needs an item: { { key, count, have }, ... } (do not change it)
 function ns.Needs(itemID)
+    cache.needs = cache.needs or {}
+    if cache.needs[itemID] then
+        return cache.needs[itemID]
+    end
     local list = {}
     for _, key in ipairs(ns.VisiblePeople()) do
         local p = ns.db.people[key]
@@ -734,6 +743,7 @@ function ns.Needs(itemID)
             list[#list + 1] = { key = key, count = want, have = have }
         end
     end
+    cache.needs[itemID] = list
     return list
 end
 
@@ -759,8 +769,11 @@ function ns.Crafters(itemID)
 end
 
 -- All recipes known in the crew, grouped by recipe:
--- { { rid, out, name, crafters = { { key, prof }, ... } }, ... }
+-- { { rid, out, name, crafters = { { key, prof }, ... } }, ... } (do not change it)
 function ns.AllRecipes()
+    if cache.allRecipes then
+        return cache.allRecipes
+    end
     local byKey, list = {}, {}
     for _, key in ipairs(ns.VisiblePeople()) do
         local p = ns.db.people[key]
@@ -781,6 +794,7 @@ function ns.AllRecipes()
         e.name = ns.RecipeName(e.rid, e.out)
     end
     table.sort(list, function(a, b) return a.name < b.name end)
+    cache.allRecipes = list
     return list
 end
 

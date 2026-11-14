@@ -65,9 +65,12 @@ local lastHeard = {}      -- [name] = GetTime() of their last hello
 local lastPayload = {}    -- [name] = their last hello, to spot the same one by the other route
 local bnetTags = {}       -- [battle tag, lower case] = true for every Battle.net friend
 local bnetTagOf = {}      -- [game account ID] = battle tag of its owner
+local bnetChar = {}       -- [game account ID] = character the game says they are on (when it says)
+local missingSince = {}   -- [name] = GetTime() when they first seemed gone from our friends lists
+local PRUNE_AFTER = 60    -- seconds someone must stay gone before they leave the list
 local bnetLoaded = false  -- the Battle.net friends list has been read
 local slimTo = {}         -- [game account ID] = true after a name-only hello
-ns.pending = {}           -- [name] = { tag, at } friends with FriendsCraft not yet answered
+ns.pending = {}           -- [name] = { tag, at, class, bnet, btag } friends with FriendsCraft not yet answered
 local announced = {}      -- [name] = true once we said so in chat this session
 local GUILD = "@guild"    -- queue target for the guild channel
 local GUILD_SECTIONS = { prof = true, recipes = true }
@@ -93,7 +96,9 @@ end
 
 local queue = {}
 local tokens, MAX_TOKENS, REFILL = 6, 6, 1.0 -- messages; per second
-local chunkId = 0
+-- Parts of one long message share a number. It starts somewhere random, so
+-- after a /reload new parts are not mistaken for parts sent just before it.
+local chunkId = math.random(0, 998)
 
 local function RawSend(item)
     local ok, res
@@ -316,6 +321,7 @@ local function ReadBNet()
     local n = (BNGetNumFriends()) or 0
     Wipe(bnetTags)
     Wipe(bnetTagOf)
+    Wipe(bnetChar)
     for i = 1, n do
         local okA, acc = pcall(B.GetFriendAccountInfo or function() end, i)
         local tag = okA and type(acc) == "table" and acc.battleTag
@@ -330,6 +336,10 @@ local function ReadBNet()
             local id = g and g.gameAccountID
             if id and not ns.IsSecret(id) then
                 bnetTagOf[id] = tag
+                local playing = g.characterName
+                if type(playing) == "string" and not ns.IsSecret(playing) and playing ~= "" then
+                    bnetChar[id] = playing
+                end
                 if g.isOnline and g.clientProgram == wow then
                     list[id] = true
                 end
@@ -389,6 +399,7 @@ local function Forget(name)
     lastHeard[name] = nil
     lastPayload[name] = nil
     ns.pending[name] = nil
+    missingSince[name] = nil
     ForgetQueued(name)
     for id, n in pairs(bnetNames) do
         if n == name then
@@ -407,8 +418,21 @@ local function PruneCrew()
     for name in pairs(ns.db.crew) do
         local p = ns.db.people[name]
         if p and not p.mine and not StillFriend(name, p) then
-            Forget(name)
-            gone = true
+            -- A friends list can read incomplete for a moment: only drop
+            -- someone who is still gone at a later check.
+            local now = GetTime()
+            if not missingSince[name] then
+                missingSince[name] = now
+                -- Nothing more goes to them in the meantime.
+                ns.online[name] = nil
+                routes[name] = nil
+                ForgetQueued(name)
+            elseif now - missingSince[name] >= PRUNE_AFTER then
+                Forget(name)
+                gone = true
+            end
+        else
+            missingSince[name] = nil
         end
     end
     if gone then
@@ -464,7 +488,9 @@ local function UpdateFriends()
         local label = "#" .. id
         nowOnline[label] = true
         local known = bnetNames[id]
-        if not wasOnline[label] and not Hidden(known) and not (known and ns.Consent(known) == "no") then
+        local declined = (known and ns.Consent(known) == "no")
+            or (bnetTagOf[id] and ns.db.consent["@" .. bnetTagOf[id]] == "no")
+        if not wasOnline[label] and not Hidden(known) and not declined then
             HelloTo(known or label, id, known == nil or ns.Consent(known) ~= "yes")
         end
     end
@@ -500,6 +526,10 @@ end
 local Handlers = {}
 local GuildHandlers = {}
 
+-- Where the hello keeps things after the section versions (see HelloPayload).
+local FACTION_FIELD = 5 + #ns.SECTIONS + 1
+local TAG_FIELD = FACTION_FIELD + 1
+
 -- from = { raw = whisper sender } or { bnet = game account ID }
 function Handlers.HI(name, payload, from)
     local f = Split(payload, "^")
@@ -507,14 +537,29 @@ function Handlers.HI(name, payload, from)
         return -- an older FriendsCraft that still uses invites
     end
     local claimed = ns.FullName(f[5])
+    local btag -- their battle tag: who they are, as the game tells it
     if from.bnet then
         -- Battle.net only delivers from Battle.net friends; check anyway.
         name = claimed
         if not name or not ReadBNet()[from.bnet] then
             return
         end
-        bnetNames[from.bnet] = name
-        routes[name] = from.bnet
+        btag = bnetTagOf[from.bnet]
+        -- Over Battle.net the character name is only what they say it is.
+        -- A name we already know from someone else can't be taken over.
+        local known = ns.db.people[name]
+        if known then
+            if known.mine then
+                return
+            end
+            if btag and type(known.bnetTag) == "string" and known.bnetTag ~= btag then
+                return -- that character belongs to another Battle.net friend
+            end
+            local playing = bnetChar[from.bnet]
+            if known.bnetTag == nil and playing and FirstName(playing) ~= FirstName(name) then
+                return -- the game says they are on someone else
+            end
+        end
     else
         if not name and claimed and FirstName(claimed) == FirstName(from.raw) then
             name = claimed -- the game gave only a first name
@@ -526,17 +571,28 @@ function Handlers.HI(name, payload, from)
     if name == ns.me then
         return
     end
-    local theirTag = (f[12] or ""):match("^%x+$")
+    local theirTag = (f[TAG_FIELD] or ""):match("^%x+$")
     if theirTag and #theirTag > 16 then
         theirTag = nil
     end
-    local consent = ns.Consent(name) or (theirTag and ns.db.consent["#" .. theirTag])
+    -- Your yes or no goes with who the game says they are: the whisper's
+    -- sender, or the Battle.net friend. A tag or name they merely claim
+    -- never counts as a yes.
+    local consent
+    if btag then
+        consent = ns.db.consent["@" .. btag]
+        if consent == nil and ns.Consent(name) == "no" then
+            consent = "no"
+        end
+    else
+        consent = ns.Consent(name)
+    end
     if consent ~= "yes" then
         -- Not shared with yet: remember them (once asked, "no" stays quiet).
         if consent == nil and not ns.db.crew[name] then
             local first = not ns.pending[name]
             ns.pending[name] = { tag = theirTag or (ns.pending[name] and ns.pending[name].tag), at = time(),
-                class = (f[4] or ""):match("^%u+$") }
+                class = (f[4] or ""):match("^%u+$"), bnet = from.bnet, btag = btag }
             if first then
                 if not announced[name] then
                     announced[name] = true
@@ -547,6 +603,10 @@ function Handlers.HI(name, payload, from)
             end
         end
         return
+    end
+    if from.bnet then
+        bnetNames[from.bnet] = name
+        routes[name] = from.bnet
     end
     local now = GetTime()
     -- The same hello by the other route (whisper and Battle.net) within a
@@ -565,8 +625,8 @@ function Handlers.HI(name, payload, from)
     p.via = nil -- heard from directly now
     p.level = tonumber(f[3]) or p.level
     p.class = (f[4] or ""):match("^%u+$") or p.class
-    p.faction = (f[11] or ""):match("^%a+$") or p.faction
-    local tag = (f[12] or ""):match("^%x+$")
+    p.faction = (f[FACTION_FIELD] or ""):match("^%a+$") or p.faction
+    local tag = (f[TAG_FIELD] or ""):match("^%x+$")
     if tag and #tag <= 16 and tag ~= ns.db.tag and tag ~= p.tag then
         p.tag = tag
         ns.Changed()
@@ -798,6 +858,16 @@ local function Handle(from, msg)
 end
 
 local buffers = {}
+local MAX_PARTS = 400 -- far more than the longest real message needs
+
+-- A whisper from someone on the friends list or already in the crew.
+local function KnownSender(raw)
+    local name = ns.ResolveName(raw, friendNames)
+    if name then
+        return IsFriend(name) or ns.db.crew[name] == true
+    end
+    return friendFirst[FirstName(raw)] == true
+end
 
 local function Receive(label, text, from)
     local mark = text:sub(1, 1)
@@ -809,16 +879,24 @@ local function Receive(label, text, from)
             return
         end
         i, n = tonumber(i), tonumber(n)
+        if not i or not n or n < 1 or n > MAX_PARTS or i < 1 or i > n then
+            return -- not something FriendsCraft sends
+        end
+        -- Only friends and guildmates get to leave parts waiting here.
+        if not from.guild and not from.bnet and not KnownSender(from.raw) then
+            return
+        end
         local key = label .. "#" .. id
         local b = buffers[key]
+        if b and (b.n ~= n or b.parts[i]) then
+            b = nil -- a new message using the same number: start over
+        end
         if not b then
             b = { n = n, parts = {}, got = 0, t = GetTime() }
             buffers[key] = b
         end
-        if not b.parts[i] then
-            b.parts[i] = part
-            b.got = b.got + 1
-        end
+        b.parts[i] = part
+        b.got = b.got + 1
         if b.got == b.n then
             buffers[key] = nil
             Handle(from, table.concat(b.parts))
@@ -896,21 +974,30 @@ end
 -- yes = share with them (and their other characters); no = stay quiet.
 function ns.AcceptFriend(name, yes)
     local pend = ns.pending[name]
-    local tag = (pend and pend.tag) or (ns.db.people[name] and ns.db.people[name].tag)
+    local p = ns.db.people[name]
+    local tag = (pend and pend.tag) or (p and p.tag)
+    local btag = (pend and pend.btag) or (p and p.bnetTag)
+    local bnet = (pend and pend.bnet) or routes[name]
     local value = yes and "yes" or "no"
-    ns.db.consent[name] = value
-    if tag then
-        ns.db.consent["#" .. tag] = value
+    local consent = ns.db.consent
+    consent[name] = value
+    -- The tag is only what they told us: a "no" never overrules an answer
+    -- already given for that tag.
+    if tag and (yes or consent["#" .. tag] == nil) then
+        consent["#" .. tag] = value
+    end
+    if type(btag) == "string" then
+        consent["@" .. btag] = value
     end
     ns.pending[name] = nil
     ns.Changed()
     if yes then
         -- Say hello properly now; if they said yes too, data flows.
         lastHello[name] = nil
-        if routes[name] then
-            lastHello["#" .. routes[name]] = nil
+        if bnet then
+            lastHello["#" .. bnet] = nil
         end
-        Queue(name, routes[name], "HI", HelloPayload(false))
+        Queue(name, bnet, "HI", HelloPayload(false))
     end
     if ns.RefreshMinimapMark then ns.RefreshMinimapMark() end
     if ns.RefreshUI then ns.RefreshUI(true) end
@@ -920,7 +1007,7 @@ end
 function ns.Declined()
     local list = {}
     for key, v in pairs(ns.db.consent) do
-        if v == "no" and key:sub(1, 1) ~= "#" then
+        if v == "no" and not key:find("^[#@]") then
             list[#list + 1] = key
         end
     end

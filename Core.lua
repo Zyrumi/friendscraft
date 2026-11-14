@@ -22,8 +22,9 @@ local DEFAULTS = {
     window = {},     -- size and place of the window
     view = {},       -- sort order and filters on the Crew page
     shopDone = {},   -- [your character] = { [itemID] = count } ticked off the shopping list (not shared)
-    consent = {},    -- [name or "#tag"] = "yes" (share) or "no" (not now) for friends with FriendsCraft
+    consent = {},    -- [name, "#tag" or "@battle tag"] = "yes" (share) or "no" (not now) for friends with FriendsCraft
     consentReady = false, -- friends from before opt-in were marked "yes" once
+    consentBnet = false,  -- answers were copied to the Battle.net friend they belong to once
     guildShare = true, -- share professions, skills and recipes with your guild
 }
 
@@ -264,6 +265,16 @@ handlers.ADDON_LOADED = { function(name)
             end
         end
         ns.db.consentReady = true
+    end
+    -- From 0.5.1 a Battle.net friend's answer is kept under their battle
+    -- tag (which the game vouches for), not only the character name.
+    if not ns.db.consentBnet then
+        for name, p in pairs(ns.db.people) do
+            if type(p) == "table" and type(p.bnetTag) == "string" and ns.db.consent[name] then
+                ns.db.consent["@" .. p.bnetTag] = ns.db.consent[name]
+            end
+        end
+        ns.db.consentBnet = true
     end
 end }
 handlers.PLAYER_LOGIN = { function()

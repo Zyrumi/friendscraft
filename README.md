@@ -15,7 +15,7 @@ Friends who also have FriendsCraft find you by themselves, and you choose who to
 
 - You must be on each other's friends list: the in-game friends list or Battle.net friends.
 - When you log in, FriendsCraft quietly says hello to your online friends. A friend who has it shows up at the top of the Crew page ("Gigi has FriendsCraft") with **Share** and **Not now**, and a "!" appears on the minimap button.
-- Nothing but your name is sent until you click Share. Data flows once you have both said yes. Not now keeps them out; you can still share later under "Show hidden".
+- Nothing but your name is sent until you click Share. Data flows once you have both said yes. Not now keeps them out; you can still share later under "Show hidden". Your answer goes with who the game says they are (the Battle.net friend, or the character that whispered), never with a name or tag they only claim.
 - A friend's other characters show up too, grouped under that friend, once they log in on any of them. You only need to be friends with one of their characters.
 - Only friends see your data. Someone who is not on your friends list gets nothing.
 - Your list follows your friends lists: remove someone as a friend and they leave your list, with what they shared.

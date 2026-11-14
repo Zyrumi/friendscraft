@@ -2489,7 +2489,13 @@ function ns.RefreshUI(now)
 end
 
 -- Item names arrive from the server a moment after we ask.
-ns.On("GET_ITEM_INFO_RECEIVED", function() ns.RefreshUI() end)
+-- An item this game doesn't have answers "no": asking again would never end.
+ns.On("GET_ITEM_INFO_RECEIVED", function(_, success)
+    if success ~= false then
+        ns.Changed() -- names are part of the cached lists
+        ns.RefreshUI()
+    end
+end)
 
 -- Shift-clicking an item while our item box has focus puts it there.
 local function OnInsertLink(link)
