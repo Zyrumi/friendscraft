@@ -22,6 +22,9 @@ local DEFAULTS = {
     window = {},     -- size and place of the window
     view = {},       -- sort order and filters on the Crew page
     shopDone = {},   -- [your character] = { [itemID] = count } ticked off the shopping list (not shared)
+    consent = {},    -- [name or "#tag"] = "yes" (share) or "no" (not now) for friends with FriendsCraft
+    consentReady = false, -- friends from before opt-in were marked "yes" once
+    guildShare = true, -- share professions, skills and recipes with your guild
 }
 
 -------------------------------------------------------------------------------
@@ -250,6 +253,17 @@ handlers.ADDON_LOADED = { function(name)
             seed = math.floor(seed / 3)
         end
         ns.db.tag = table.concat(hex)
+    end
+    -- Sharing became opt-in in 0.5: friends you already shared with stay.
+    if not ns.db.consentReady then
+        for name in pairs(ns.db.crew) do
+            ns.db.consent[name] = "yes"
+            local p = ns.db.people[name]
+            if p and type(p.tag) == "string" then
+                ns.db.consent["#" .. p.tag] = "yes"
+            end
+        end
+        ns.db.consentReady = true
     end
 end }
 handlers.PLAYER_LOGIN = { function()

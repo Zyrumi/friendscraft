@@ -11,10 +11,11 @@ Share professions, gold, recipes, bags and a shopping list with your friends. In
 
 ## Finding friends
 
-Nothing to set up. Friends who also have FriendsCraft show up by themselves:
+Friends who also have FriendsCraft find you by themselves, and you choose who to share with:
 
 - You must be on each other's friends list: the in-game friends list or Battle.net friends.
-- When you log in, FriendsCraft quietly says hello to your online friends. Everyone who has it joins your crew.
+- When you log in, FriendsCraft quietly says hello to your online friends. A friend who has it shows up at the top of the Crew page ("Gigi has FriendsCraft") with **Share** and **Not now**, and a "!" appears on the minimap button.
+- Nothing but your name is sent until you click Share. Data flows once you have both said yes. Not now keeps them out; you can still share later under "Show hidden".
 - A friend's other characters show up too, grouped under that friend, once they log in on any of them. You only need to be friends with one of their characters.
 - Only friends see your data. Someone who is not on your friends list gets nothing.
 - Your list follows your friends lists: remove someone as a friend and they leave your list, with what they shared.
@@ -29,6 +30,10 @@ Open the window with the button on the minimap or by typing `/fc`. Drag the bott
 - **Who has it:** search everyone's bags and banks.
 - **Item tooltips:** hover any item in the game to see who in the crew has it, who needs it and who can make it.
 - **Settings:** turn the minimap button or the item tooltip lines off (Settings tab, or type `/fc settings`).
+
+## Your guild
+
+Guildmates with FriendsCraft show up in their own section on the Crew page, in the recipe list and in "can make it" on item tooltips, marked "(guild)". With your guild you share only your professions, skills and recipes, never your bags, gold or shopping list. Turn it off in Settings ("Share professions with my guild"). Guildmates who leave the guild drop off the list.
 
 ## Hiding people
 

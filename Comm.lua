@@ -23,6 +23,16 @@
 -- with (you removed them, or they ended a Battle.net friendship) leaves your
 -- list together with what they shared.
 --
+-- Sharing with a friend is opt-in: a friend with FriendsCraft shows up as
+-- "has FriendsCraft" with Share and Not now. Until you click Share they get
+-- nothing but your name, and data flows only when both of you said yes.
+--
+-- Guild: only professions, skills and recipes, over the hidden guild
+-- channel (never bags, gold or the shopping list):
+--   GH  guild hello: ver^reply^full name^level^class^faction^rev prof^rev recipes
+--   GQ  please send: name^"prof,recipes"
+--   GS  section: name^section^rev^data
+--
 -- Messages (kind^payload):
 --   HI  hello: ver^reply^level^class^full name^rev of each section^faction^tag
 --   RQ  please send these sections: "prof,items"
@@ -57,6 +67,10 @@ local bnetTags = {}       -- [battle tag, lower case] = true for every Battle.ne
 local bnetTagOf = {}      -- [game account ID] = battle tag of its owner
 local bnetLoaded = false  -- the Battle.net friends list has been read
 local slimTo = {}         -- [game account ID] = true after a name-only hello
+ns.pending = {}           -- [name] = { tag, at } friends with FriendsCraft not yet answered
+local announced = {}      -- [name] = true once we said so in chat this session
+local GUILD = "@guild"    -- queue target for the guild channel
+local GUILD_SECTIONS = { prof = true, recipes = true }
 local FULL_HELLO_DELAY = 6 -- after their answer (the other side skips a second hello within 5 s)
 
 local function Wipe(t)
@@ -92,7 +106,11 @@ local function RawSend(item)
         if not C_ChatInfo or not C_ChatInfo.SendAddonMessage then
             return "drop"
         end
-        ok, res = pcall(C_ChatInfo.SendAddonMessage, PREFIX, item.text, "WHISPER", item.target)
+        if item.target == GUILD then
+            ok, res = pcall(C_ChatInfo.SendAddonMessage, PREFIX, item.text, "GUILD")
+        else
+            ok, res = pcall(C_ChatInfo.SendAddonMessage, PREFIX, item.text, "WHISPER", item.target)
+        end
     end
     if not ok then
         return "drop"
@@ -121,7 +139,7 @@ pump:SetScript("OnUpdate", function(_, elapsed)
         tokens = 0
     else
         tokens = tokens - 1
-        if not item.bnet then
+        if not item.bnet and item.target ~= GUILD then
             recentWhisper[item.target] = GetTime()
         end
     end
@@ -205,6 +223,9 @@ end
 
 -- Sends a changed section to every online crew member.
 function ns.Broadcast(section)
+    if ns.GuildChanged then
+        ns.GuildChanged(section)
+    end
     for name in pairs(ns.db.crew) do
         if ns.online[name] and not Hidden(name) then
             SendSection(name, section)
@@ -239,8 +260,10 @@ local function HelloTo(target, bnet, slim)
         return
     end
     lastHello[id] = GetTime()
-    if slim and bnet then
-        slimTo[bnet] = true
+    if slim then
+        if bnet then
+            slimTo[bnet] = true
+        end
         Queue(target, bnet, "HI", SlimHello())
     else
         Queue(target, bnet, "HI", HelloPayload(false))
@@ -365,6 +388,7 @@ local function Forget(name)
     routes[name] = nil
     lastHeard[name] = nil
     lastPayload[name] = nil
+    ns.pending[name] = nil
     ForgetQueued(name)
     for id, n in pairs(bnetNames) do
         if n == name then
@@ -432,15 +456,16 @@ local function UpdateFriends()
     local nowOnline = {}
     for _, target in ipairs(chars) do
         nowOnline[target] = true
-        if not wasOnline[target] and not routes[target] and not Hidden(target) then
-            HelloTo(target, nil)
+        if not wasOnline[target] and not routes[target] and not Hidden(target) and ns.Consent(target) ~= "no" then
+            HelloTo(target, nil, ns.Consent(target) ~= "yes")
         end
     end
     for id in pairs(bnet) do
         local label = "#" .. id
         nowOnline[label] = true
-        if not wasOnline[label] and not Hidden(bnetNames[id]) then
-            HelloTo(bnetNames[id] or label, id, bnetNames[id] == nil)
+        local known = bnetNames[id]
+        if not wasOnline[label] and not Hidden(known) and not (known and ns.Consent(known) == "no") then
+            HelloTo(known or label, id, known == nil or ns.Consent(known) ~= "yes")
         end
     end
     wasOnline = nowOnline
@@ -473,6 +498,7 @@ local function Split(s, sep)
 end
 
 local Handlers = {}
+local GuildHandlers = {}
 
 -- from = { raw = whisper sender } or { bnet = game account ID }
 function Handlers.HI(name, payload, from)
@@ -498,6 +524,28 @@ function Handlers.HI(name, payload, from)
         end
     end
     if name == ns.me then
+        return
+    end
+    local theirTag = (f[12] or ""):match("^%x+$")
+    if theirTag and #theirTag > 16 then
+        theirTag = nil
+    end
+    local consent = ns.Consent(name) or (theirTag and ns.db.consent["#" .. theirTag])
+    if consent ~= "yes" then
+        -- Not shared with yet: remember them (once asked, "no" stays quiet).
+        if consent == nil and not ns.db.crew[name] then
+            local first = not ns.pending[name]
+            ns.pending[name] = { tag = theirTag or (ns.pending[name] and ns.pending[name].tag), at = time(),
+                class = (f[4] or ""):match("^%u+$") }
+            if first then
+                if not announced[name] then
+                    announced[name] = true
+                    ns.Print(ns.ShortName(name) .. " has FriendsCraft too. Open it (/fc) to choose whether to share with them.")
+                end
+                if ns.RefreshMinimapMark then ns.RefreshMinimapMark() end
+                if ns.RefreshUI then ns.RefreshUI() end
+            end
+        end
         return
     end
     local now = GetTime()
@@ -720,7 +768,18 @@ end
 
 local function Handle(from, msg)
     local kind, payload = msg:match("^(%u%u)%^(.*)$")
-    if not kind or not Handlers[kind] then
+    if not kind then
+        return
+    end
+    -- Guild messages only count on the guild channel, friend messages only
+    -- in whispers and over Battle.net.
+    if from.guild then
+        if GuildHandlers[kind] and ns.db.guildShare then
+            GuildHandlers[kind](from.raw, payload)
+        end
+        return
+    end
+    if not Handlers[kind] then
         return
     end
     local name
@@ -780,7 +839,11 @@ ns.On("CHAT_MSG_ADDON", function(prefix, text, channel, sender)
     if type(text) ~= "string" or type(sender) ~= "string" or ns.FullName(sender) == ns.me then
         return
     end
-    Receive(sender, text, { raw = sender })
+    if channel == "GUILD" then
+        Receive("G:" .. sender, text, { raw = sender, guild = true })
+    elseif channel == "WHISPER" or channel == nil then
+        Receive(sender, text, { raw = sender })
+    end
 end)
 
 ns.On("BN_CHAT_MSG_ADDON", function(prefix, text, channel, senderID)
@@ -827,6 +890,235 @@ if AddFilter then
 end
 
 -------------------------------------------------------------------------------
+-- Opt-in: Share or Not now for a friend who has FriendsCraft
+-------------------------------------------------------------------------------
+
+-- yes = share with them (and their other characters); no = stay quiet.
+function ns.AcceptFriend(name, yes)
+    local pend = ns.pending[name]
+    local tag = (pend and pend.tag) or (ns.db.people[name] and ns.db.people[name].tag)
+    local value = yes and "yes" or "no"
+    ns.db.consent[name] = value
+    if tag then
+        ns.db.consent["#" .. tag] = value
+    end
+    ns.pending[name] = nil
+    ns.Changed()
+    if yes then
+        -- Say hello properly now; if they said yes too, data flows.
+        lastHello[name] = nil
+        if routes[name] then
+            lastHello["#" .. routes[name]] = nil
+        end
+        Queue(name, routes[name], "HI", HelloPayload(false))
+    end
+    if ns.RefreshMinimapMark then ns.RefreshMinimapMark() end
+    if ns.RefreshUI then ns.RefreshUI(true) end
+end
+
+-- Friends who said no ("Not now"), by name.
+function ns.Declined()
+    local list = {}
+    for key, v in pairs(ns.db.consent) do
+        if v == "no" and key:sub(1, 1) ~= "#" then
+            list[#list + 1] = key
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+function ns.PendingList()
+    local list = {}
+    for name in pairs(ns.pending) do
+        if not ns.db.crew[name] and ns.Consent(name) == nil then
+            list[#list + 1] = name
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+-------------------------------------------------------------------------------
+-- Guild: professions, skills and recipes only
+-------------------------------------------------------------------------------
+
+local lastGuildHello = 0
+local lastGuildSection = {} -- [section] = GetTime() we last sent it to the guild
+
+local function InGuild()
+    return ns.db.guildShare and IsInGuild and IsInGuild() and ns.GuildName() ~= nil
+end
+
+local function GuildHello(reply)
+    if not InGuild() then
+        return
+    end
+    if reply and GetTime() - lastGuildHello < 30 then
+        return -- answered someone a moment ago; they all heard it
+    end
+    lastGuildHello = GetTime()
+    local me = ns.Me()
+    Queue(GUILD, nil, "GH", table.concat({ ns.PROTOCOL, reply and 1 or 0, ns.me, me.level or 0, me.class or "",
+        me.faction or "", me.rev.prof or 0, me.rev.recipes or 0 }, "^"), "GH")
+end
+ns.GuildHello = GuildHello
+
+-- A name someone claims in a guild message, checked against the sender.
+local function GuildName(claimed, sender)
+    local name = ns.FullName(claimed)
+    if name and FirstName(name) == FirstName(sender) and name ~= ns.me then
+        return name
+    end
+    return nil
+end
+
+local function GuildPerson(name)
+    local p = ns.Person(name, true)
+    if p.mine then
+        return nil
+    end
+    p.name = name
+    if not ns.db.crew[name] then
+        p.guildOf = ns.GuildName()
+    end
+    return p
+end
+
+function GuildHandlers.GH(sender, payload)
+    local f = Split(payload, "^")
+    if (tonumber(f[1]) or 0) < ns.PROTOCOL then
+        return
+    end
+    local name = GuildName(f[3], sender)
+    local p = name and GuildPerson(name)
+    if not p then
+        return
+    end
+    p.level = tonumber(f[4]) or p.level
+    p.class = (f[5] or ""):match("^%u+$") or p.class
+    p.faction = (f[6] or ""):match("^%a+$") or p.faction
+    p.gseen = time()
+    if not ns.db.crew[name] then
+        p.seen = p.gseen
+    end
+    local want = {}
+    if (tonumber(f[7]) or 0) > (p.rev.prof or 0) then want[#want + 1] = "prof" end
+    if (tonumber(f[8]) or 0) > (p.rev.recipes or 0) then want[#want + 1] = "recipes" end
+    if #want > 0 then
+        Queue(GUILD, nil, "GQ", name .. "^" .. table.concat(want, ","), "GQ" .. name)
+    end
+    if f[2] ~= "1" then
+        GuildHello(true)
+    end
+    ns.Changed()
+    if ns.RefreshUI then ns.RefreshUI() end
+end
+
+function GuildHandlers.GQ(sender, payload)
+    local target, list = payload:match("^([^%^]+)%^(.*)$")
+    if ns.FullName(target) ~= ns.me or not InGuild() then
+        return
+    end
+    local me = ns.Me()
+    for section in (list or ""):gmatch("[^,]+") do
+        if GUILD_SECTIONS[section] and GetTime() - (lastGuildSection[section] or 0) > 20 then
+            lastGuildSection[section] = GetTime()
+            Queue(GUILD, nil, "GS", ns.me .. "^" .. section .. "^" .. (me.rev[section] or 0) .. "^"
+                .. ns.Encode[section](me[section] or {}), "GS" .. section)
+        end
+    end
+end
+
+function GuildHandlers.GS(sender, payload)
+    local claimed, section, rev, data = payload:match("^([^%^]+)%^(%a+)%^(%d+)%^(.*)$")
+    local name = claimed and GuildName(claimed, sender)
+    if not name or not GUILD_SECTIONS[section] then
+        return
+    end
+    local p = GuildPerson(name)
+    rev = tonumber(rev)
+    if not p or rev <= (p.rev[section] or 0) then
+        return
+    end
+    local ok, value = pcall(ns.Decode[section], data)
+    if ok and value then
+        p[section] = value
+        p.rev[section] = rev
+        ns.Changed()
+        if ns.RefreshUI then ns.RefreshUI() end
+    end
+end
+
+-- Guildmates who left the guild (or a guild you left) drop off the list.
+local function PruneGuild()
+    local guild = ns.GuildName()
+    if not guild or not GetNumGuildMembers or not GetGuildRosterInfo then
+        return
+    end
+    local n = GetNumGuildMembers() or 0
+    if n == 0 then
+        return
+    end
+    local full, first = {}, {}
+    for i = 1, n do
+        local ok, raw = pcall(GetGuildRosterInfo, i)
+        if ok and type(raw) == "string" and not ns.IsSecret(raw) then
+            local name = ns.FullName(raw)
+            if name then full[name] = true end
+            first[FirstName(raw)] = true
+        end
+    end
+    local gone = false
+    for key, p in pairs(ns.db.people) do
+        if ns.IsGuildOnly(key) and (p.guildOf ~= guild or not (full[key] or first[FirstName(key)])) then
+            ns.db.people[key] = nil
+            gone = true
+        end
+    end
+    if gone then
+        ns.Changed()
+        if ns.RefreshUI then ns.RefreshUI() end
+    end
+end
+
+-- Your professions or recipes changed: tell the guild the new versions.
+function ns.GuildChanged(section)
+    if GUILD_SECTIONS[section] then
+        lastGuildHello = 0
+        GuildHello(true)
+    end
+end
+
+-- The guild setting was switched.
+function ns.SetGuildShare(on)
+    ns.db.guildShare = on and true or false
+    ns.Changed()
+    if on then
+        lastGuildHello = 0
+        GuildHello(false)
+    else
+        for i = #queue, 1, -1 do
+            if queue[i].target == GUILD then
+                table.remove(queue, i)
+            end
+        end
+    end
+    if ns.RefreshUI then ns.RefreshUI(true) end
+end
+
+ns.On("GUILD_ROSTER_UPDATE", function()
+    if ready then
+        PruneGuild()
+    end
+end)
+ns.On("PLAYER_GUILD_UPDATE", function()
+    if ready then
+        C_Timer.After(3, ns.Safe(function() GuildHello(false) end, "guild"))
+    end
+end)
+
+-------------------------------------------------------------------------------
 -- Start-up and friends coming and going
 -------------------------------------------------------------------------------
 
@@ -843,6 +1135,10 @@ ns.On("FC_READY", function()
     C_Timer.After(5, ns.Safe(function()
         ready = true
         UpdateFriends()
+        if C_GuildInfo and C_GuildInfo.GuildRoster then
+            pcall(C_GuildInfo.GuildRoster)
+        end
+        GuildHello(false)
     end, "friends"))
 end)
 

@@ -68,6 +68,38 @@ local function Relayed(p)
     return p and type(p.via) == "string" and ns.db.crew[p.via] == true
 end
 
+-- Your guild's name, or nil when you are not in one.
+function ns.GuildName()
+    if not GetGuildInfo then
+        return nil
+    end
+    local ok, name = pcall(GetGuildInfo, "player")
+    if ok and type(name) == "string" and name ~= "" and not ns.IsSecret(name) then
+        return name
+    end
+    return nil
+end
+
+-- A guildmate we only know through the guild (not a friend, not yours).
+function ns.IsGuildOnly(key)
+    local p = ns.db.people[key]
+    return p ~= nil and type(p.guildOf) == "string" and not p.mine and not ns.db.crew[key] and not Relayed(p)
+end
+
+local function GuildShown(key, p)
+    return ns.db.guildShare and ns.IsGuildOnly(key) and p.guildOf == ns.GuildName()
+end
+
+-- "yes", "no" or nil (not asked yet) for sharing with a friend.
+function ns.Consent(key)
+    local c = ns.db.consent
+    if c[key] then
+        return c[key]
+    end
+    local g = ns.GroupOf(key)
+    return g ~= key and c[g] or nil
+end
+
 -- Characters shown in the window and tooltips: you, your alts, your crew
 -- and their alts. People you hid are left out unless includeHidden is set.
 -- Returns a new list each time (safe to sort).
@@ -77,7 +109,7 @@ local function BuildVisible(includeHidden)
         return includeHidden or not ns.IsHidden(key)
     end
     for key, p in pairs(ns.db.people) do
-        if (p.mine or ns.db.crew[key] or Relayed(p)) and Shown(key) then
+        if (p.mine or ns.db.crew[key] or Relayed(p) or GuildShown(key, p)) and Shown(key) then
             list[#list + 1] = key
         end
     end

@@ -158,6 +158,9 @@ local function Who(key)
     if p and p.mine then
         return ns.ShortName(key) .. " (your alt)"
     end
+    if ns.IsGuildOnly(key) then
+        return ns.ShortName(key) .. " (guild)"
+    end
     return ns.ShortName(key)
 end
 
@@ -653,6 +656,25 @@ local function CrewRow(parent)
     for i = 1, PRIM_SLOTS do
         row.slots[i] = Slot(PRIM_X + (i - 1) * SLOT_W)
     end
+    -- A friend who has FriendsCraft and is waiting for your answer.
+    row.share = Button(row, "Share", 80, function()
+        if row.item and row.item.invite then
+            GameTooltip:Hide()
+            ns.AcceptFriend(row.item.key, true)
+        end
+    end)
+    row.share:SetHeight(20)
+    row.share:SetPoint("LEFT", PRIM_X, 0)
+    row.later = Button(row, "Not now", 80, function()
+        if row.item and row.item.invite then
+            GameTooltip:Hide()
+            ns.AcceptFriend(row.item.key, false)
+        end
+    end)
+    row.later:SetHeight(20)
+    row.later:SetPoint("LEFT", row.share, "RIGHT", 6, 0)
+    row.share:Hide()
+    row.later:Hide()
     return row
 end
 
@@ -679,6 +701,29 @@ local function FillSlot(s, e, item, text)
 end
 
 local function FillCrewRow(row, item)
+    local invite = item.invite == true
+    row.share:SetShown(invite)
+    row.later:SetShown(invite and not item.declined)
+    for _, s in ipairs(row.slots) do s:SetShown(not invite) end
+    for _, s in ipairs(row.sec) do s:SetShown(not invite) end
+    if invite then
+        row:SetAlpha(1)
+        row.chevron:Hide()
+        row.online:Hide()
+        row.faction:Hide()
+        row.class:ClearAllPoints()
+        row.class:SetPoint("LEFT", 32, 0)
+        SetClassIcon(row.class, item.class)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("LEFT", 52, 0)
+        row.name:SetWidth(PRIM_X - 60)
+        row.name:SetText(item.name)
+        local c = item.declined and INK_DIM or GOOD
+        row.name:SetTextColor(c[1], c[2], c[3])
+        row.level:SetText("")
+        row.gold:SetText("")
+        return
+    end
     local x = item.child and 18 or 0
     row.chevron:ClearAllPoints()
     row.chevron:SetPoint("LEFT", x + 2, 0)
@@ -1024,10 +1069,15 @@ local function BuildCrewPage()
             return p.faction ~= nil and myFaction ~= nil and p.faction ~= myFaction
         end
 
-        -- Group everyone by friend.
+        -- Group everyone by friend; guildmates go in their own section.
         local groups, order, profNames, seenProf = {}, {}, {}, {}
+        local guildKeys = {}
         for _, key in ipairs(ns.VisiblePeople(self.showHidden)) do
-            local g = ns.GroupOf(key)
+            local guildOnly = ns.IsGuildOnly(key)
+            if guildOnly then
+                guildKeys[#guildKeys + 1] = key
+            end
+            local g = guildOnly and ("guild:" .. key) or ns.GroupOf(key)
             if not groups[g] then
                 groups[g] = { key = g, members = {} }
                 order[#order + 1] = g
@@ -1102,6 +1152,9 @@ local function BuildCrewPage()
         local friends, friendsOnline, chars, hiddenCount = 0, 0, 0, 0
         for _, g in ipairs(order) do
             local grp = groups[g]
+            if g:sub(1, 6) == "guild:" then
+                grp.guild = true
+            end
             grp.shown, grp.onlineCount = {}, 0
             for _, k in ipairs(grp.members) do
                 local p = ns.db.people[k] or { rev = {}, prof = {} }
@@ -1110,11 +1163,13 @@ local function BuildCrewPage()
                     grp.shown[#grp.shown + 1] = k
                 end
             end
-            if g ~= mine then
+            if g ~= mine and not grp.guild then
                 friends = friends + 1
                 if grp.onlineCount > 0 then friendsOnline = friendsOnline + 1 end
             end
-            chars = chars + #grp.members
+            if not grp.guild then
+                chars = chars + #grp.members
+            end
             -- Name: you, or the friend's character that is online or was seen last.
             local rep = grp.members[1]
             for _, k in ipairs(grp.members) do
@@ -1127,10 +1182,11 @@ local function BuildCrewPage()
             end
             grp.rep = rep
             grp.label = g == mine and "You" or ns.ShortName(rep)
-            if #grp.shown > 0 then
+            if #grp.shown > 0 and not grp.guild then
                 rows[#rows + 1] = grp
             end
         end
+        local declined = ns.Declined()
         for key in pairs(ns.db.hidden) do
             local found = ns.db.people[key] or ns.db.crew[key]
             if not found and key:sub(1, 1) == "#" then
@@ -1140,6 +1196,7 @@ local function BuildCrewPage()
             end
             if found then hiddenCount = hiddenCount + 1 end
         end
+        hiddenCount = hiddenCount + #declined
         if hiddenCount == 0 then
             self.showHidden = false
         end
@@ -1193,6 +1250,38 @@ local function BuildCrewPage()
         end
 
         local items, anyHint = {}, false
+        -- Friends who have FriendsCraft and wait for your answer.
+        for _, name in ipairs(ns.PendingList()) do
+            local pend = ns.pending[name] or {}
+            items[#items + 1] = {
+                invite = true,
+                key = name,
+                class = pend.class,
+                name = ns.ShortName(name) .. " has FriendsCraft",
+                tooltip = function(tt)
+                    tt:SetText(ns.LongName(name), 1, 1, 1)
+                    tt:AddLine("A friend of yours with FriendsCraft.", 1, 1, 1, true)
+                    tt:AddLine("Share: you see each other's professions, recipes, bags, gold and shopping lists once you have both said yes.",
+                        INK_DIM[1], INK_DIM[2], INK_DIM[3], true)
+                    tt:AddLine("Not now: they get nothing. You can still share later under \"Show hidden\".",
+                        INK_DIM[1], INK_DIM[2], INK_DIM[3], true)
+                end,
+            }
+        end
+        if self.showHidden then
+            for _, name in ipairs(declined) do
+                items[#items + 1] = {
+                    invite = true,
+                    declined = true,
+                    key = name,
+                    name = ns.ShortName(name) .. " (not shared)",
+                    tooltip = function(tt)
+                        tt:SetText(ns.LongName(name), 1, 1, 1)
+                        tt:AddLine("You chose not to share with them. Click Share to change that.", 1, 1, 1, true)
+                    end,
+                }
+            end
+        end
         for _, grp in ipairs(rows) do
             local shown = grp.shown
             -- Characters: highest level first (or by the Gold column), then name.
@@ -1280,13 +1369,68 @@ local function BuildCrewPage()
             end
         end
 
+        -- Guildmates (professions and recipes only), in one section.
+        local guildShown = {}
+        for _, k in ipairs(guildKeys) do
+            local p = ns.db.people[k] or { rev = {}, prof = {} }
+            if Passes(k, p, text) then
+                guildShown[#guildShown + 1] = k
+            end
+        end
+        if #guildShown > 0 then
+            table.sort(guildShown, function(a, b)
+                local pa, pb = ns.db.people[a] or {}, ns.db.people[b] or {}
+                if view.sort == "level" and (pa.level or 0) ~= (pb.level or 0) then
+                    if view.desc then return (pa.level or 0) > (pb.level or 0) end
+                    return (pa.level or 0) < (pb.level or 0)
+                end
+                return ns.LongName(a) < ns.LongName(b)
+            end)
+            local open = view.open.guild == true or text ~= "" or page.prof ~= nil
+            local profs, holders = BestProfs(guildKeys)
+            local guildName = ns.GuildName() or "Guild"
+            local onlineCount = 0
+            for _, k in ipairs(guildKeys) do
+                if Online(k) then onlineCount = onlineCount + 1 end
+            end
+            items[#items + 1] = {
+                key = "guild",
+                group = true,
+                open = open,
+                size = #guildKeys,
+                onlineCount = onlineCount,
+                online = false,
+                profs = profs,
+                holders = holders,
+                name = guildName .. "  " .. INK_DIM_HEX .. "(" .. #guildKeys .. ", guild)|r",
+                tooltip = function(tt)
+                    tt:SetText(guildName, 1, 1, 1)
+                    tt:AddLine(#guildKeys .. " guildmates with FriendsCraft. Best skill in each profession on this line.", 1, 1, 1, true)
+                    tt:AddLine("Guildmates share professions, skills and recipes only.", INK_DIM[1], INK_DIM[2], INK_DIM[3], true)
+                    tt:AddLine("Click to open or close.", INK_DIM[1], INK_DIM[2], INK_DIM[3])
+                end,
+                onClick = function(button)
+                    if button == "LeftButton" then
+                        GameTooltip:Hide()
+                        view.open.guild = not open
+                        page:Refresh()
+                    end
+                end,
+            }
+            if open then
+                for _, k in ipairs(guildShown) do
+                    items[#items + 1] = CharItem(k, true, { label = guildName })
+                end
+            end
+        end
+
         for _, h in ipairs(self.headers) do
             local on = h.sortKey and h.sortKey == view.sort
             local c = on and { 1, 1, 1 } or GOLD
             h.label:SetTextColor(c[1], c[2], c[3])
         end
 
-        if friends == 0 then
+        if friends == 0 and #guildKeys == 0 and #ns.PendingList() == 0 then
             self.status:SetText("No friends yet. Friends (press O) who have FriendsCraft show up here by themselves.")
         elseif #items == 0 then
             self.status:SetText("Nobody matches these filters.")
@@ -2030,6 +2174,9 @@ local function BuildSettingsPage()
         Checkbox(page.frame, "Crew lines on item tooltips", "\"Crew has\", \"needs\" and \"can make it\" when you hover an item.",
             function() return ns.db.tooltips end,
             function(on) ns.db.tooltips = on end),
+        Checkbox(page.frame, "Share professions with my guild", "Guildmates with FriendsCraft see your professions, skills and recipes. Never your bags, gold or shopping list.",
+            function() return ns.db.guildShare end,
+            function(on) ns.SetGuildShare(on) end),
     }
     for i, b in ipairs(page.boxes) do
         b:SetPoint("TOPLEFT", 8, -32 - (i - 1) * 60)
@@ -2043,6 +2190,7 @@ local function BuildSettingsPage()
     local notesHeading = Ink(page.frame, "GameFontNormal", "Good to know", GOLD)
     notesHeading:SetPoint("TOPLEFT", 380, -8)
     local notes = Ink(page.frame, "GameFontHighlight", table.concat({
+        "Friends: a friend with FriendsCraft shows up on the Crew page with Share and Not now. Nothing but your name is sent until you both say yes.",
         "A friend's other characters show up by themselves once that friend logs in on any of them.",
         "Hidden people: on the Crew page, click \"Show hidden\" to see them and right-click to bring them back.",
         "Recipes: open each profession window once so your recipes are shared.",
@@ -2459,15 +2607,33 @@ local function BuildMinimapButton()
         end)
     end)
     b:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+    -- "!" while a friend waits for your answer (a mark, and the tooltip says it).
+    b.mark = b:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    b.mark:SetPoint("TOPRIGHT", 2, 0)
+    b.mark:SetText("!")
+    b.mark:SetTextColor(GOOD[1], GOOD[2], GOOD[3])
+    b.mark:Hide()
     b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("FriendsCraft", 1, 1, 1)
+        local waiting = ns.PendingList and #ns.PendingList() or 0
+        if waiting > 0 then
+            GameTooltip:AddLine(waiting == 1 and "1 friend has FriendsCraft: choose whether to share."
+                or (waiting .. " friends have FriendsCraft: choose whether to share."), GOOD[1], GOOD[2], GOOD[3], true)
+        end
         GameTooltip:AddLine("Click to open. Drag to move.", INFO[1], INFO[2], INFO[3])
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
     PlaceMinimapButton(b)
     return b
+end
+
+function ns.RefreshMinimapMark()
+    local b = FriendsCraftMinimapButton
+    if b and b.mark then
+        b.mark:SetShown(ns.PendingList and #ns.PendingList() > 0)
+    end
 end
 
 -- Shows or hides the minimap button to match the setting.
