@@ -463,48 +463,6 @@ local function Dropdown(parent, width, generator)
     return dd
 end
 
--- A column title in the style of the game's Who list.
-local HEADER_H = 24
-local function ColumnHeader(parent, text, width, onClick)
-    local b = CreateFrame("Button", nil, parent)
-    b:SetSize(width, HEADER_H)
-    local file = "Interface\\FriendsFrame\\WhoFrame-ColumnTabs"
-    local left = b:CreateTexture(nil, "BACKGROUND")
-    if UseFile(left, file) then
-        left:SetTexCoord(0, 0.078125, 0, 0.75)
-        left:SetSize(5, HEADER_H)
-        left:SetPoint("TOPLEFT")
-        local right = b:CreateTexture(nil, "BACKGROUND")
-        UseFile(right, file)
-        right:SetTexCoord(0.90625, 0.96875, 0, 0.75)
-        right:SetSize(4, HEADER_H)
-        right:SetPoint("TOPRIGHT")
-        local mid = b:CreateTexture(nil, "BACKGROUND")
-        UseFile(mid, file)
-        mid:SetTexCoord(0.078125, 0.90625, 0, 0.75)
-        mid:SetPoint("TOPLEFT", left, "TOPRIGHT")
-        mid:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT")
-    else
-        left:SetAllPoints()
-        left:SetColorTexture(1, 1, 1, 0.06)
-    end
-    if onClick then
-        local hl = b:CreateTexture(nil, "HIGHLIGHT")
-        if UseFile(hl, "Interface\\PaperDollInfoFrame\\UI-Character-Tab-Highlight") then
-            hl:SetBlendMode("ADD")
-            hl:SetPoint("TOPLEFT", -2, 5)
-            hl:SetPoint("BOTTOMRIGHT", 2, -7)
-        else
-            hl:SetAllPoints()
-            hl:SetColorTexture(1, 1, 1, 0.08)
-        end
-        b:SetScript("OnClick", onClick)
-    end
-    b.label = Ink(b, "GameFontHighlightSmall", text or "")
-    b.label:SetPoint("LEFT", 6, 1)
-    return b
-end
-
 -- A gold heading line inside a list.
 local function HeadingParts(row)
     row.hText = Ink(row, "GameFontNormal", "", GOLD)
@@ -957,38 +915,50 @@ local function BuildCrewPage()
 
     -- Column headers; click one to sort by it, again to flip the order.
     local header = CreateFrame("Frame", nil, page.frame)
-    header:SetPoint("TOPLEFT", 0, LIST_TOP)
+    header:SetPoint("TOPLEFT", 0, LIST_TOP - 2)
     header:SetPoint("RIGHT", -14, 0)
-    header:SetHeight(HEADER_H)
+    header:SetHeight(20)
+    local line = header:CreateTexture(nil, "ARTWORK")
+    line:SetPoint("BOTTOMLEFT")
+    line:SetPoint("BOTTOMRIGHT")
+    line:SetHeight(1)
+    line:SetColorTexture(1, 0.82, 0, 0.35)
     page.headers = {}
     local function Header(text, x, width, key)
-        local b = ColumnHeader(header, text, width, key and function()
-            if view.sort == key then
-                view.desc = not view.desc
-            else
-                view.sort, view.desc = key, key ~= "name"
-            end
-            page:Refresh()
-        end)
+        local b = CreateFrame("Button", nil, header)
         b:SetPoint("LEFT", x, 0)
+        b:SetSize(width, 20)
+        b.label = Ink(b, "GameFontNormalSmall", text, GOLD)
+        b.label:SetPoint("LEFT", 2, 0)
         b.sortKey = key
+        if key then
+            local hl = b:CreateTexture(nil, "HIGHLIGHT")
+            hl:SetAllPoints()
+            hl:SetColorTexture(1, 1, 1, 0.08)
+            b:SetScript("OnClick", function()
+                if view.sort == key then
+                    view.desc = not view.desc
+                else
+                    view.sort, view.desc = key, key ~= "name"
+                end
+                page:Refresh()
+            end)
+        end
         page.headers[#page.headers + 1] = b
         return b
     end
-    local nameHeader = Header("Name", 0, NAME_W, "name")
-    nameHeader.label:SetPoint("LEFT", 30, 1)
-    Header("Level", NAME_W, LEVEL_W, "level")
-    local goldHeader = Header("Gold", NAME_W + LEVEL_W, PRIM_X - NAME_W - LEVEL_W, "gold")
+    Header("Name", 30, NAME_W - 30, "name")
+    Header("Level", NAME_W - 4, LEVEL_W + 4, "level")
+    local goldHeader = Header("Gold", NAME_W + LEVEL_W, GOLD_W, "gold")
     goldHeader.label:ClearAllPoints()
-    goldHeader.label:SetPoint("RIGHT", -(PRIM_X - NAME_W - LEVEL_W - GOLD_W) - 2, 1)
-    Header("Professions", PRIM_X, SEC_X - PRIM_X)
-    -- One column per secondary profession, with its icon (hover for its name).
+    goldHeader.label:SetPoint("RIGHT", -2, 0)
+    -- One icon per secondary profession column (hover for its name).
     for i, sec in ipairs(SECONDARY) do
-        local b = ColumnHeader(header, "", SLOT_W)
-        b:SetPoint("LEFT", SEC_X + (i - 1) * SLOT_W, 0)
+        local b = CreateFrame("Button", nil, header)
+        b:SetSize(16, 16)
+        b:SetPoint("LEFT", SEC_X + 1 + (i - 1) * SLOT_W, 0)
         local icon = b:CreateTexture(nil, "ARTWORK")
-        icon:SetSize(16, 16)
-        icon:SetPoint("LEFT", 2, 1)
+        icon:SetAllPoints()
         if not UseFile(icon, sec.icon) then
             icon:SetTexture(134400)
         end
@@ -999,13 +969,10 @@ local function BuildCrewPage()
         end)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
-    -- The rest of the width, so the header runs to the end.
-    local filler = ColumnHeader(header, "", 10)
-    filler:SetPoint("LEFT", SEC_X + #SECONDARY * SLOT_W, 0)
-    filler:SetPoint("RIGHT", header, "RIGHT", 0, 0)
+    Header("Professions", PRIM_X, PRIM_SLOTS * SLOT_W)
 
     page.list = ScrollList(page.frame, ROW_H, CrewRow, FillCrewRow)
-    page.list.frame:SetPoint("TOPLEFT", 0, LIST_TOP - HEADER_H - 2)
+    page.list.frame:SetPoint("TOPLEFT", 0, LIST_TOP - 24)
     page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
 
     page.status = Status(page)
@@ -1915,21 +1882,24 @@ end
 -------------------------------------------------------------------------------
 
 -- The item's type for grouping: trade goods by kind (Cloth, Herb, ...)
--- first, then everything else by type. Returns name, order.
+-- first, then everything else by type. Returns name, order, and whether it
+-- is a crafting material (trade goods or reagents).
+local CLASS_REAGENT, CLASS_TRADE_GOODS = 5, 7
 local function ItemGroup(id)
     local get = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
     if get then
         local ok, _, itemType, subType, _, _, classID = pcall(get, id)
-        if ok and not ns.IsSecret(itemType) and not ns.IsSecret(subType) then
-            if classID == 7 and type(subType) == "string" and subType ~= "" then
-                return subType, 0
+        if ok and not ns.IsSecret(itemType) and not ns.IsSecret(subType) and not ns.IsSecret(classID) then
+            local mat = classID == CLASS_TRADE_GOODS or classID == CLASS_REAGENT
+            if mat and type(subType) == "string" and subType ~= "" then
+                return subType, 0, true
             end
             if type(itemType) == "string" and itemType ~= "" then
-                return itemType, 1
+                return itemType, mat and 0 or 1, mat
             end
         end
     end
-    return "Other", 2
+    return "Other", 2, false
 end
 
 -- "Gigi 12, You 9, Emoolia 3 +2"
@@ -1962,16 +1932,17 @@ local function BuildFindPage()
     function page:Refresh()
         local text = strtrim(self.search:GetText() or ""):lower()
         local searching = text ~= ""
-        -- Everything someone in the crew holds (or what matches the search),
-        -- grouped by type.
+        -- Crafting materials the crew holds; a search covers every item.
+        -- Grey (junk) items never show. Grouped by type.
         local groups, order = {}, {}
         local count = 0
         for _, id in ipairs(ns.KnownItemIDs()) do
             local name = ns.ItemName(id)
-            if (name or not searching) and (not searching or name:lower():find(text, 1, true)) then
+            local gname, rank, mat = ItemGroup(id)
+            local wanted = searching and name and name:lower():find(text, 1, true) or (not searching and mat)
+            if wanted and ns.ItemQuality(id) ~= 0 then
                 local holders = ns.Holders(id)
                 if #holders > 0 then
-                    local gname, rank = ItemGroup(id)
                     local g = groups[gname]
                     if not g then
                         g = { name = gname, rank = rank, list = {} }
@@ -2011,10 +1982,12 @@ local function BuildFindPage()
         end
         if count == 0 then
             self.status:SetText(searching and "Nobody in the crew has that."
-                or "Nothing yet. Bags are shared as soon as friends log in; banks when they visit one.")
+                or "No crafting materials yet. Bags are shared when friends log in; banks when they visit one.")
+        elseif searching then
+            self.status:SetText((count == 1 and "1 item" or (count .. " items")) .. " found. Hover one to see who has it.")
         else
-            self.status:SetText((count == 1 and "1 item" or (count .. " items")) .. (searching and " found." or " in the crew's bags and banks.")
-                .. " Hover one to see who has it.")
+            self.status:SetText((count == 1 and "1 crafting material" or (count .. " crafting materials"))
+                .. " in the crew's bags and banks. Search to find any other item.")
         end
         self.list:SetItems(items)
     end
