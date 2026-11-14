@@ -328,11 +328,11 @@ local function ScrollList(parent, rowH, makeRow, fillRow)
     local track = bar:CreateTexture(nil, "BACKGROUND")
     track:SetAllPoints()
     track:SetColorTexture(0, 0, 0, 0.35)
-    bar:SetThumbTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
-    local thumb = bar.GetThumbTexture and bar:GetThumbTexture()
-    if type(thumb) == "table" then
-        thumb:SetSize(16, 24)
-    end
+    local thumb = bar:CreateTexture(nil, "OVERLAY")
+    thumb:SetColorTexture(0.72, 0.64, 0.48, 0.85)
+    thumb:SetSize(8, 30)
+    bar:SetThumbTexture(thumb)
+    list.thumb = thumb
     bar:SetMinMaxValues(0, 0)
     bar:SetValueStep(1)
     bar:SetValue(0)
@@ -376,6 +376,10 @@ local function ScrollList(parent, rowH, makeRow, fillRow)
         bar:SetMinMaxValues(0, max)
         bar:SetValue(self.offset)
         bar:SetShown(max > 0)
+        local h = f:GetHeight()
+        if max > 0 and type(h) == "number" and h > 0 then
+            self.thumb:SetHeight(math.max(24, h * self.count / #self.items))
+        end
     end
 
     function list:SetOffset(value)
@@ -416,18 +420,176 @@ local function FillTextRow(row, item)
     row.text:SetTextColor(c[1], c[2], c[3])
 end
 
+-- The game's own search box (magnifier, grey hint, clear button); a plain
+-- text box where the game doesn't have it.
+local function SearchInput(parent, width, placeholder)
+    local ok, e = pcall(CreateFrame, "EditBox", nil, parent, "SearchBoxTemplate")
+    if not ok or not e or type(rawget(e, "Instructions")) ~= "table" then
+        if ok and e then
+            e:Hide()
+        end
+        return Input(parent, width, placeholder)
+    end
+    e:SetSize(width, 22)
+    e:SetAutoFocus(false)
+    e.Instructions:SetText(placeholder)
+    e.UpdateHint = function()
+        if SearchBoxTemplate_OnTextChanged then
+            pcall(SearchBoxTemplate_OnTextChanged, e)
+        end
+    end
+    return e
+end
+
+-- The game's own dropdown menu button (nil where the game has none).
+-- generator(dropdown, root) fills the menu each time it opens.
+local function Dropdown(parent, width, generator)
+    if not MenuUtil then
+        return nil
+    end
+    local ok, dd = pcall(CreateFrame, "DropdownButton", nil, parent, "WowStyle1DropdownTemplate")
+    if not ok or not dd or type(rawget(dd, "SetupMenu")) ~= "function" then
+        if ok and dd then
+            dd:Hide()
+        end
+        return nil
+    end
+    dd:SetWidth(width)
+    local okSetup = pcall(dd.SetupMenu, dd, generator)
+    if not okSetup then
+        dd:Hide()
+        return nil
+    end
+    return dd
+end
+
+-- A column title in the style of the game's Who list.
+local HEADER_H = 24
+local function ColumnHeader(parent, text, width, onClick)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(width, HEADER_H)
+    local file = "Interface\\FriendsFrame\\WhoFrame-ColumnTabs"
+    local left = b:CreateTexture(nil, "BACKGROUND")
+    if UseFile(left, file) then
+        left:SetTexCoord(0, 0.078125, 0, 0.75)
+        left:SetSize(5, HEADER_H)
+        left:SetPoint("TOPLEFT")
+        local right = b:CreateTexture(nil, "BACKGROUND")
+        UseFile(right, file)
+        right:SetTexCoord(0.90625, 0.96875, 0, 0.75)
+        right:SetSize(4, HEADER_H)
+        right:SetPoint("TOPRIGHT")
+        local mid = b:CreateTexture(nil, "BACKGROUND")
+        UseFile(mid, file)
+        mid:SetTexCoord(0.078125, 0.90625, 0, 0.75)
+        mid:SetPoint("TOPLEFT", left, "TOPRIGHT")
+        mid:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT")
+    else
+        left:SetAllPoints()
+        left:SetColorTexture(1, 1, 1, 0.06)
+    end
+    if onClick then
+        local hl = b:CreateTexture(nil, "HIGHLIGHT")
+        if UseFile(hl, "Interface\\PaperDollInfoFrame\\UI-Character-Tab-Highlight") then
+            hl:SetBlendMode("ADD")
+            hl:SetPoint("TOPLEFT", -2, 5)
+            hl:SetPoint("BOTTOMRIGHT", 2, -7)
+        else
+            hl:SetAllPoints()
+            hl:SetColorTexture(1, 1, 1, 0.08)
+        end
+        b:SetScript("OnClick", onClick)
+    end
+    b.label = Ink(b, "GameFontHighlightSmall", text or "")
+    b.label:SetPoint("LEFT", 6, 1)
+    return b
+end
+
+-- A gold heading line inside a list.
+local function HeadingParts(row)
+    row.hText = Ink(row, "GameFontNormal", "", GOLD)
+    row.hText:SetPoint("BOTTOMLEFT", 6, 4)
+    row.hRight = Ink(row, "GameFontHighlightSmall", "", INK_DIM)
+    row.hRight:SetPoint("LEFT", row.hText, "RIGHT", 10, 0)
+    row.hLine = row:CreateTexture(nil, "ARTWORK")
+    row.hLine:SetHeight(1)
+    row.hLine:SetPoint("BOTTOMLEFT", 4, 1)
+    row.hLine:SetPoint("BOTTOMRIGHT", -4, 1)
+    row.hLine:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.35)
+end
+
+-- List row with an icon, a name and a dim note on the right; or a heading
+-- (item.kind == "heading").
+local function IconRow(parent)
+    local row = CreateFrame("Button", nil, parent)
+    RowScripts(row)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(18, 18)
+    row.icon:SetPoint("LEFT", 6, 0)
+    row.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    row.right = Ink(row, "GameFontHighlightSmall", "", INK_DIM)
+    row.right:SetPoint("RIGHT", -6, 0)
+    row.right:SetJustifyH("RIGHT")
+    row.right:SetWordWrap(false)
+    row.text = Ink(row, "GameFontHighlight")
+    row.text:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
+    row.text:SetPoint("RIGHT", row.right, "LEFT", -12, 0)
+    row.text:SetWordWrap(false)
+    HeadingParts(row)
+    return row
+end
+
+local function FillIconRow(row, item)
+    local heading = item.kind == "heading"
+    row.hText:SetShown(heading)
+    row.hRight:SetShown(heading)
+    row.hLine:SetShown(heading)
+    row.icon:SetShown(not heading)
+    row.text:SetShown(not heading)
+    row.right:SetShown(not heading)
+    if row.stripe then
+        row.stripe:SetAlpha(heading and 0 or 1)
+    end
+    if heading then
+        row.hText:SetText(item.text or "")
+        row.hRight:SetText(item.right or "")
+        return
+    end
+    row.icon:SetTexture(item.icon or 134400)
+    row.text:SetText(item.text or "")
+    local c = item.color or INK
+    row.text:SetTextColor(c[1], c[2], c[3])
+    row.right:SetText(item.right or "")
+end
+
+-- Text color for an item's quality (white while unknown).
+local function QualityColor(id)
+    local q = ns.ItemQuality(id)
+    local qc = q and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q]
+    if qc and qc.r then
+        return { qc.r, qc.g, qc.b }
+    end
+    return INK
+end
+
 -------------------------------------------------------------------------------
 -- The window
 -------------------------------------------------------------------------------
 
-local window, content, tabs, currentTab
+local window, content, toolbar, tabs, currentTab
 local pages = {}
+local LIST_TOP = 0 -- where lists start inside a page (lower without the game's panel)
 
+-- page.frame holds the page; page.bar is its strip of search boxes and
+-- filters under the window title (where the game's own windows keep them).
 local function NewPage(key)
     local page = { key = key }
     page.frame = CreateFrame("Frame", nil, content)
     page.frame:SetAllPoints()
     page.frame:Hide()
+    page.bar = CreateFrame("Frame", nil, toolbar)
+    page.bar:SetAllPoints()
+    page.bar:Hide()
     pages[key] = page
     return page
 end
@@ -725,8 +887,8 @@ local function BuildCrewPage()
     if view.alliance == nil then view.alliance = true end
     if view.horde == nil then view.horde = true end
 
-    page.search = Input(page.frame, 170, "Name or profession")
-    page.search:SetPoint("TOPLEFT", 8, -4)
+    page.search = SearchInput(page.bar, 180, "Name or profession")
+    page.search:SetPoint("LEFT", 8, 0)
     page.search:SetScript("OnTextChanged", function(self)
         self.UpdateHint()
         page.list.offset = 0
@@ -738,18 +900,31 @@ local function BuildCrewPage()
         page:Refresh()
     end
     page.toggles = {
-        Toggle(page.frame, "Online only", function() return view.onlineOnly end, function(on) view.onlineOnly = on; Redraw() end),
-        Toggle(page.frame, "Alliance", function() return view.alliance end, function(on) view.alliance = on; Redraw() end),
-        Toggle(page.frame, "Horde", function() return view.horde end, function(on) view.horde = on; Redraw() end),
+        Toggle(page.bar, "Online only", function() return view.onlineOnly end, function(on) view.onlineOnly = on; Redraw() end),
+        Toggle(page.bar, "Alliance", function() return view.alliance end, function(on) view.alliance = on; Redraw() end),
+        Toggle(page.bar, "Horde", function() return view.horde end, function(on) view.horde = on; Redraw() end),
     }
-    page.toggles[1]:SetPoint("LEFT", page.search, "RIGHT", 10, 0)
+    page.toggles[1]:SetPoint("LEFT", page.search, "RIGHT", 14, 0)
     for i = 2, #page.toggles do
         page.toggles[i]:SetPoint("LEFT", page.toggles[i - 1].label, "RIGHT", 10, -1)
     end
 
     -- Profession filter: a menu where the game has one, otherwise each
     -- click picks the next profession.
-    page.profButton = Button(page.frame, "Profession: any", 160, function(self)
+    local function PickProf(name)
+        page.prof = name
+        Redraw()
+    end
+    page.profDrop = Dropdown(page.bar, 170, function(_, root)
+        root:CreateRadio("Any profession", function() return page.prof == nil end, function() PickProf(nil) end)
+        for _, name in ipairs(page.profNames or {}) do
+            root:CreateRadio(name, function() return page.prof == name end, function() PickProf(name) end)
+        end
+    end)
+    if page.profDrop then
+        page.profDrop:SetPoint("LEFT", page.toggles[#page.toggles].label, "RIGHT", 16, 0)
+    end
+    page.profButton = not page.profDrop and Button(page.bar, "Profession: any", 160, function(self)
         local names = page.profNames or {}
         local function Pick(name)
             page.prof = name
@@ -776,54 +951,44 @@ local function BuildCrewPage()
         end
         Pick(nextName)
     end)
-    page.profButton:SetPoint("LEFT", page.toggles[#page.toggles].label, "RIGHT", 12, 0)
+    if page.profButton then
+        page.profButton:SetPoint("LEFT", page.toggles[#page.toggles].label, "RIGHT", 12, 0)
+    end
 
     -- Column headers; click one to sort by it, again to flip the order.
     local header = CreateFrame("Frame", nil, page.frame)
-    header:SetPoint("TOPLEFT", 0, -32)
+    header:SetPoint("TOPLEFT", 0, LIST_TOP)
     header:SetPoint("RIGHT", -14, 0)
-    header:SetHeight(20)
-    local line = header:CreateTexture(nil, "ARTWORK")
-    line:SetPoint("BOTTOMLEFT")
-    line:SetPoint("BOTTOMRIGHT")
-    line:SetHeight(1)
-    line:SetColorTexture(1, 0.82, 0, 0.35)
+    header:SetHeight(HEADER_H)
     page.headers = {}
     local function Header(text, x, width, key)
-        local b = CreateFrame("Button", nil, header)
+        local b = ColumnHeader(header, text, width, key and function()
+            if view.sort == key then
+                view.desc = not view.desc
+            else
+                view.sort, view.desc = key, key ~= "name"
+            end
+            page:Refresh()
+        end)
         b:SetPoint("LEFT", x, 0)
-        b:SetSize(width, 20)
-        b.label = Ink(b, "GameFontNormalSmall", text, GOLD)
-        b.label:SetPoint("LEFT", 2, 0)
         b.sortKey = key
-        if key then
-            local hl = b:CreateTexture(nil, "HIGHLIGHT")
-            hl:SetAllPoints()
-            hl:SetColorTexture(1, 1, 1, 0.08)
-            b:SetScript("OnClick", function()
-                if view.sort == key then
-                    view.desc = not view.desc
-                else
-                    view.sort, view.desc = key, key ~= "name"
-                end
-                page:Refresh()
-            end)
-        end
         page.headers[#page.headers + 1] = b
         return b
     end
-    Header("Name", 30, NAME_W - 30, "name")
-    Header("Level", NAME_W - 4, LEVEL_W + 4, "level")
-    local goldHeader = Header("Gold", NAME_W + LEVEL_W, GOLD_W, "gold")
+    local nameHeader = Header("Name", 0, NAME_W, "name")
+    nameHeader.label:SetPoint("LEFT", 30, 1)
+    Header("Level", NAME_W, LEVEL_W, "level")
+    local goldHeader = Header("Gold", NAME_W + LEVEL_W, PRIM_X - NAME_W - LEVEL_W, "gold")
     goldHeader.label:ClearAllPoints()
-    goldHeader.label:SetPoint("RIGHT", -2, 0)
-    -- One icon per secondary profession column (hover for its name).
+    goldHeader.label:SetPoint("RIGHT", -(PRIM_X - NAME_W - LEVEL_W - GOLD_W) - 2, 1)
+    Header("Professions", PRIM_X, SEC_X - PRIM_X)
+    -- One column per secondary profession, with its icon (hover for its name).
     for i, sec in ipairs(SECONDARY) do
-        local b = CreateFrame("Button", nil, header)
-        b:SetSize(16, 16)
-        b:SetPoint("LEFT", SEC_X + 1 + (i - 1) * SLOT_W, 0)
+        local b = ColumnHeader(header, "", SLOT_W)
+        b:SetPoint("LEFT", SEC_X + (i - 1) * SLOT_W, 0)
         local icon = b:CreateTexture(nil, "ARTWORK")
-        icon:SetAllPoints()
+        icon:SetSize(16, 16)
+        icon:SetPoint("LEFT", 2, 1)
         if not UseFile(icon, sec.icon) then
             icon:SetTexture(134400)
         end
@@ -834,10 +999,13 @@ local function BuildCrewPage()
         end)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
-    Header("Professions", PRIM_X, PRIM_SLOTS * SLOT_W)
+    -- The rest of the width, so the header runs to the end.
+    local filler = ColumnHeader(header, "", 10)
+    filler:SetPoint("LEFT", SEC_X + #SECONDARY * SLOT_W, 0)
+    filler:SetPoint("RIGHT", header, "RIGHT", 0, 0)
 
     page.list = ScrollList(page.frame, ROW_H, CrewRow, FillCrewRow)
-    page.list.frame:SetPoint("TOPLEFT", 0, -54)
+    page.list.frame:SetPoint("TOPLEFT", 0, LIST_TOP - HEADER_H - 2)
     page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
 
     page.status = Status(page)
@@ -911,7 +1079,12 @@ local function BuildCrewPage()
         if page.prof and not seenProf[page.prof] then
             page.prof = nil
         end
-        self.profButton:SetText("Profession: " .. (page.prof or "any"))
+        if self.profButton then
+            self.profButton:SetText("Profession: " .. (page.prof or "any"))
+        end
+        if self.profDrop and self.profDrop.GenerateMenu then
+            pcall(self.profDrop.GenerateMenu, self.profDrop)
+        end
 
         local function Sum(keys, field)
             local total = 0
@@ -1229,18 +1402,25 @@ end
 
 local function BuildRecipesPage()
     local page = NewPage("recipes")
-    page.search = Input(page.frame, INDEX_W - 8, "Search all recipes")
-    page.search:SetPoint("TOPLEFT", 8, -4)
+    page.search = SearchInput(page.bar, 220, "Search all recipes")
+    page.search:SetPoint("LEFT", 8, 0)
     page.search:SetScript("OnTextChanged", function(self)
         self.UpdateHint()
         page.list.offset = 0
         page:Refresh()
     end)
-    page.heading = Ink(page.frame, "GameFontNormal", "", GOLD)
-    page.heading:SetPoint("TOPLEFT", INDEX_W + 16, -8)
+    page.heading = Ink(page.frame, "GameFontNormalLarge", "", GOLD)
+    page.heading:SetPoint("TOPLEFT", INDEX_W + 18, LIST_TOP - 6)
+    page.headingCount = Ink(page.frame, "GameFontHighlightSmall", "", INK_DIM)
+    page.headingCount:SetPoint("LEFT", page.heading, "RIGHT", 10, -1)
+    local headLine = page.frame:CreateTexture(nil, "ARTWORK")
+    headLine:SetHeight(1)
+    headLine:SetPoint("TOPLEFT", INDEX_W + 14, LIST_TOP - 28)
+    headLine:SetPoint("RIGHT", -14, 0)
+    headLine:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.35)
     page.status = Status(page)
-    page.list = ScrollList(page.frame, ROW_H, TextRow, FillTextRow)
-    page.list.frame:SetPoint("TOPLEFT", INDEX_W + 12, -32)
+    page.list = ScrollList(page.frame, ROW_H, IconRow, FillIconRow)
+    page.list.frame:SetPoint("TOPLEFT", INDEX_W + 12, LIST_TOP - 32)
     page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
 
     local function Choose(prof)
@@ -1254,25 +1434,32 @@ local function BuildRecipesPage()
     page.index = {}
     for i = 1, 16 do
         local row = IndexRow(page.frame, Choose)
-        row:SetPoint("TOPLEFT", 0, -32 - (i - 1) * 24)
+        row:SetPoint("TOPLEFT", 0, LIST_TOP - 4 - (i - 1) * 24)
         page.index[i] = row
     end
     local divider = page.frame:CreateTexture(nil, "ARTWORK")
-    divider:SetPoint("TOPLEFT", INDEX_W + 4, -32)
+    divider:SetPoint("TOPLEFT", INDEX_W + 4, LIST_TOP)
     divider:SetPoint("BOTTOMLEFT", INDEX_W + 4, 22)
     divider:SetWidth(1)
     divider:SetColorTexture(1, 0.82, 0, 0.25)
 
-    -- "Tom, Mira" for the others who can make it; your own name is left out
-    -- (hover shows everyone).
-    local function Others(e)
-        local names = {}
+    -- "You, Tom, Mira": who can make it, you first.
+    local function Makers(e)
+        local names, you = {}, false
         for _, c in ipairs(e.crafters) do
-            if c.key ~= ns.me then
+            if c.key == ns.me then
+                you = true
+            else
                 names[#names + 1] = Who(c.key)
             end
         end
-        return #names > 0 and ("   " .. INK_DIM_HEX .. table.concat(names, ", ") .. "|r") or ""
+        if you then
+            table.insert(names, 1, "You")
+        end
+        if #names > 3 then
+            return table.concat(names, ", ", 1, 3) .. " +" .. (#names - 3)
+        end
+        return table.concat(names, ", ")
     end
 
     function page:Refresh()
@@ -1321,10 +1508,15 @@ local function BuildRecipesPage()
             source = groups[self.chosen] or {}
             self.heading:SetText(self.chosen or "Recipes")
         end
+        self.headingCount:SetText(#source == 1 and "1 recipe" or (#source .. " recipes"))
         local items = {}
         for _, e in ipairs(source) do
+            local prof = e.crafters[1] and e.crafters[1].prof
             items[#items + 1] = {
-                text = e.name .. Others(e),
+                text = e.name,
+                icon = (e.out and e.out > 0) and ns.ItemIcon(e.out) or ProfIconByName(prof),
+                color = (e.out and e.out > 0) and QualityColor(e.out) or INK,
+                right = Makers(e),
                 tooltip = function(tt) ReagentTooltip(tt, e) end,
             }
         end
@@ -1554,12 +1746,12 @@ end
 local function BuildShopPage()
     local page = NewPage("shop")
     local addW, countW = 60, 80
-    page.item = Input(page.frame, 260, "Item name, or shift-click it")
-    page.item:SetPoint("TOPLEFT", 8, -4)
-    page.count = Input(page.frame, countW, "How many")
+    page.item = Input(page.bar, 260, "Item name, or shift-click it")
+    page.item:SetPoint("LEFT", 12, 0)
+    page.count = Input(page.bar, countW, "How many")
     page.count:SetPoint("LEFT", page.item, "RIGHT", 10, 0)
     page.count:SetNumeric(true)
-    local add = Button(page.frame, "Add", addW, function()
+    local add = Button(page.bar, "Add", addW, function()
         local id = ns.FindItem(strtrim(page.item:GetText() or ""))
         local count = tonumber(page.count:GetText()) or 1
         if not id then
@@ -1575,15 +1767,15 @@ local function BuildShopPage()
         page.count.UpdateHint()
     end)
     add:SetPoint("LEFT", page.count, "RIGHT", 8, 0)
-    page.clear = Button(page.frame, "Clear ticked", 110, function() ns.ClearDone() end)
-    page.clear:SetPoint("TOPRIGHT", -14, -4)
+    page.clear = Button(page.bar, "Clear ticked", 130, function() ns.ClearDone() end)
+    page.clear:SetPoint("RIGHT", -8, 0)
     page.item:SetScript("OnEnterPressed", function() page.count:SetFocus() end)
     page.count:SetScript("OnEnterPressed", function() add:Click() end)
     page.item:SetScript("OnTextChanged", function(self) self.UpdateHint() end)
     page.count:SetScript("OnTextChanged", function(self) self.UpdateHint() end)
     page.status = Status(page)
     page.list = ScrollList(page.frame, SHOP_ROW_H, ShopRow, FillShopRow)
-    page.list.frame:SetPoint("TOPLEFT", 0, -34)
+    page.list.frame:SetPoint("TOPLEFT", 0, LIST_TOP)
     page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
     ns.shopItemBox = page.item
 
@@ -1722,52 +1914,107 @@ end
 -- Who has it
 -------------------------------------------------------------------------------
 
+-- The item's type for grouping: trade goods by kind (Cloth, Herb, ...)
+-- first, then everything else by type. Returns name, order.
+local function ItemGroup(id)
+    local get = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if get then
+        local ok, _, itemType, subType, _, _, classID = pcall(get, id)
+        if ok and not ns.IsSecret(itemType) and not ns.IsSecret(subType) then
+            if classID == 7 and type(subType) == "string" and subType ~= "" then
+                return subType, 0
+            end
+            if type(itemType) == "string" and itemType ~= "" then
+                return itemType, 1
+            end
+        end
+    end
+    return "Other", 2
+end
+
+-- "Gigi 12, You 9, Emoolia 3 +2"
+local function ShortHolders(holders, limit)
+    local parts = {}
+    for i, h in ipairs(holders) do
+        if i > limit then
+            parts[#parts + 1] = "+" .. (#holders - limit)
+            break
+        end
+        parts[#parts + 1] = Who(h.key) .. " " .. (h.bags + h.bank)
+    end
+    return table.concat(parts, ", ")
+end
+
 local function BuildFindPage()
     local page = NewPage("find")
-    page.search = Input(page.frame, 260, "Search items, e.g. linen")
-    page.search:SetPoint("TOPLEFT", 8, -4)
+    page.search = SearchInput(page.bar, 260, "Search items, e.g. linen")
+    page.search:SetPoint("LEFT", 8, 0)
     page.search:SetScript("OnTextChanged", function(self)
         self.UpdateHint()
         page.list.offset = 0
         page:Refresh()
     end)
     page.status = Status(page)
-    page.list = ScrollList(page.frame, ROW_H, TextRow, FillTextRow)
-    page.list.frame:SetPoint("TOPLEFT", 0, -32)
+    page.list = ScrollList(page.frame, ROW_H, IconRow, FillIconRow)
+    page.list.frame:SetPoint("TOPLEFT", 0, LIST_TOP)
     page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
 
     function page:Refresh()
         local text = strtrim(self.search:GetText() or ""):lower()
-        local items = {}
-        if #text >= 2 then
-            local found = {}
-            for _, id in ipairs(ns.KnownItemIDs()) do
-                local name = ns.ItemName(id)
-                if name and name:lower():find(text, 1, true) then
-                    local holders = ns.Holders(id)
-                    if #holders > 0 then
-                        found[#found + 1] = { id = id, name = name, holders = holders }
+        local searching = text ~= ""
+        -- Everything someone in the crew holds (or what matches the search),
+        -- grouped by type.
+        local groups, order = {}, {}
+        local count = 0
+        for _, id in ipairs(ns.KnownItemIDs()) do
+            local name = ns.ItemName(id)
+            if (name or not searching) and (not searching or name:lower():find(text, 1, true)) then
+                local holders = ns.Holders(id)
+                if #holders > 0 then
+                    local gname, rank = ItemGroup(id)
+                    local g = groups[gname]
+                    if not g then
+                        g = { name = gname, rank = rank, list = {} }
+                        groups[gname] = g
+                        order[#order + 1] = g
                     end
+                    local total = 0
+                    for _, h in ipairs(holders) do total = total + h.bags + h.bank end
+                    g.list[#g.list + 1] = { id = id, name = name or ("item " .. id), holders = holders, total = total }
+                    count = count + 1
                 end
             end
-            table.sort(found, function(a, b) return a.name < b.name end)
-            for _, e in ipairs(found) do
-                local total = 0
-                for _, h in ipairs(e.holders) do total = total + h.bags + h.bank end
+        end
+        table.sort(order, function(a, b)
+            if a.rank ~= b.rank then return a.rank < b.rank end
+            return a.name < b.name
+        end)
+        local items = {}
+        for _, g in ipairs(order) do
+            table.sort(g.list, function(a, b) return a.name < b.name end)
+            items[#items + 1] = { kind = "heading", text = g.name, right = #g.list == 1 and "1 item" or (#g.list .. " items") }
+            for _, e in ipairs(g.list) do
                 items[#items + 1] = {
-                    text = e.name .. "   " .. INK_DIM_HEX .. total .. " in the crew|r",
+                    icon = ns.ItemIcon(e.id),
+                    text = e.name .. "  " .. INK_DIM_HEX .. "x" .. e.total .. "|r",
+                    color = QualityColor(e.id),
+                    right = ShortHolders(e.holders, 3),
                     tooltip = function(tt)
                         tt:SetText(e.name, 1, 1, 1)
+                        tt:AddLine(e.total .. " in the crew", INK_DIM[1], INK_DIM[2], INK_DIM[3])
                         for _, h in ipairs(e.holders) do
                             tt:AddLine(HolderText(h), 1, 1, 1)
                         end
                     end,
                 }
             end
-            self.status:SetText(#items == 0 and "Nobody in the crew has that."
-                or "Hover to see who has it. Banks update on each bank visit.")
+        end
+        if count == 0 then
+            self.status:SetText(searching and "Nobody in the crew has that."
+                or "Nothing yet. Bags are shared as soon as friends log in; banks when they visit one.")
         else
-            self.status:SetText("Type at least 2 letters of an item name.")
+            self.status:SetText((count == 1 and "1 item" or (count .. " items")) .. (searching and " found." or " in the crew's bags and banks.")
+                .. " Hover one to see who has it.")
         end
         self.list:SetItems(items)
     end
@@ -1859,6 +2106,7 @@ local function ShowTab(name)
     currentTab = name
     for key, page in pairs(pages) do
         page.frame:SetShown(key == name)
+        page.bar:SetShown(key == name)
     end
     for _, t in ipairs(tabs) do
         -- The open tab gets the glowing frame.
@@ -2034,6 +2282,20 @@ local function BuildWindow()
         content:SetPoint("TOPLEFT", 16, -40)
         content:SetPoint("BOTTOMRIGHT", -16, 16)
     end
+
+    -- The strip between the title and the list area.
+    toolbar = CreateFrame("Frame", nil, f)
+    if framed and type(f.Inset) == "table" then
+        toolbar:SetPoint("TOPLEFT", f, "TOPLEFT", 62, -26)
+        toolbar:SetPoint("BOTTOMRIGHT", f.Inset, "TOPRIGHT", -6, 2)
+        LIST_TOP = 0
+    else
+        toolbar:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
+        toolbar:SetPoint("RIGHT", content, "RIGHT", 0, 0)
+        toolbar:SetHeight(30)
+        LIST_TOP = -34
+    end
+    toolbar:SetFrameLevel(f:GetFrameLevel() + 10)
 
     tabs = {}
     local defs = {
