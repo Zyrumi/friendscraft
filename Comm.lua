@@ -14,6 +14,15 @@
 -- People you hide in the book get nothing from you: no hello answer, no
 -- updates. Showing them again says hello so they catch up.
 --
+-- Battle.net only tells us which character a friend is playing once they
+-- answer, so the first hello to a Battle.net friend says nothing but your
+-- name. The rest (level, class, faction, alts) follows once we know who
+-- they are and that you have not hidden them.
+--
+-- Your list follows your friends lists: someone you are no longer friends
+-- with (you removed them, or they ended a Battle.net friendship) leaves your
+-- list together with what they shared.
+--
 -- Messages (kind^payload):
 --   HI  hello: ver^reply^level^class^full name^rev of each section^faction^tag
 --   RQ  please send these sections: "prof,items"
@@ -43,6 +52,12 @@ local friendsLoaded = false
 local recentWhisper = {}  -- [target] = GetTime() of last whisper
 local lastHello = {}      -- [target] = GetTime() of our last hello
 local lastHeard = {}      -- [name] = GetTime() of their last hello
+local lastPayload = {}    -- [name] = their last hello, to spot the same one by the other route
+local bnetTags = {}       -- [battle tag, lower case] = true for every Battle.net friend
+local bnetTagOf = {}      -- [game account ID] = battle tag of its owner
+local bnetLoaded = false  -- the Battle.net friends list has been read
+local slimTo = {}         -- [game account ID] = true after a name-only hello
+local FULL_HELLO_DELAY = 6 -- after their answer (the other side skips a second hello within 5 s)
 
 local function Wipe(t)
     for k in pairs(t) do
@@ -206,13 +221,30 @@ function ns.HelloOnline()
     end
 end
 
-local function HelloTo(target, bnet)
+-- A hello with nothing but our name, for a Battle.net friend we can't tell
+-- yet (could be someone you hid). Empty fields leave what they know as is.
+local function SlimHello()
+    local parts = { ns.PROTOCOL, 0, "", "", ns.me }
+    for _ in ipairs(ns.SECTIONS) do
+        parts[#parts + 1] = ""
+    end
+    parts[#parts + 1] = "" -- faction
+    parts[#parts + 1] = "" -- tag
+    return table.concat(parts, "^")
+end
+
+local function HelloTo(target, bnet, slim)
     local id = bnet and ("#" .. bnet) or target
     if lastHello[id] and GetTime() - lastHello[id] < HELLO_GAP then
         return
     end
     lastHello[id] = GetTime()
-    Queue(target, bnet, "HI", HelloPayload(false))
+    if slim and bnet then
+        slimTo[bnet] = true
+        Queue(target, bnet, "HI", SlimHello())
+    else
+        Queue(target, bnet, "HI", HelloPayload(false))
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -258,14 +290,36 @@ local function ReadBNet()
         return list
     end
     local wow = BNET_CLIENT_WOW or "WoW"
-    for i = 1, (BNGetNumFriends()) or 0 do
+    local n = (BNGetNumFriends()) or 0
+    Wipe(bnetTags)
+    Wipe(bnetTagOf)
+    for i = 1, n do
+        local okA, acc = pcall(B.GetFriendAccountInfo or function() end, i)
+        local tag = okA and type(acc) == "table" and acc.battleTag
+        if type(tag) == "string" and not ns.IsSecret(tag) then
+            tag = tag:lower()
+            bnetTags[tag] = true
+        else
+            tag = nil
+        end
         for j = 1, B.GetFriendNumGameAccounts(i) or 0 do
             local g = B.GetFriendGameAccountInfo(i, j)
             local id = g and g.gameAccountID
-            if id and not ns.IsSecret(id) and g.isOnline and g.clientProgram == wow then
-                list[id] = true
+            if id and not ns.IsSecret(id) then
+                bnetTagOf[id] = tag
+                if g.isOnline and g.clientProgram == wow then
+                    list[id] = true
+                end
             end
         end
+    end
+    -- Only trust the list once it has someone on it, and never while
+    -- Battle.net is down (the list then reads as empty).
+    local connected = not BNConnected or BNConnected()
+    if not connected then
+        bnetLoaded = false
+    elseif n > 0 then
+        bnetLoaded = true
     end
     return list
 end
@@ -280,6 +334,63 @@ end
 
 local ready = false
 local wasOnline = {} -- [target] = true for friends online at the last check
+
+-- Still on one of our friends lists? Only answers no when every way we
+-- know them by has been checked. People from before this check (not
+-- marked yet) stay until we hear from them again.
+local function StillFriend(name, p)
+    local decided, keep = false, false
+    if p.charFriend then
+        if not friendsLoaded then
+            return true
+        end
+        decided = true
+        keep = keep or friendNames[name] or friendFirst[FirstName(name)] or false
+    end
+    if p.bnetTag then
+        if not bnetLoaded then
+            return true
+        end
+        decided = true
+        keep = keep or bnetTags[p.bnetTag] or false
+    end
+    return keep or not decided
+end
+
+-- Takes someone (and the alts they passed on) off our list.
+local function Forget(name)
+    ns.db.crew[name] = nil
+    ns.db.people[name] = nil
+    ns.online[name] = nil
+    routes[name] = nil
+    lastHeard[name] = nil
+    lastPayload[name] = nil
+    ForgetQueued(name)
+    for id, n in pairs(bnetNames) do
+        if n == name then
+            bnetNames[id] = nil
+        end
+    end
+    for key, q in pairs(ns.db.people) do
+        if q.via == name then
+            ns.db.people[key] = nil
+        end
+    end
+end
+
+local function PruneCrew()
+    local gone = false
+    for name in pairs(ns.db.crew) do
+        local p = ns.db.people[name]
+        if p and not p.mine and not StillFriend(name, p) then
+            Forget(name)
+            gone = true
+        end
+    end
+    if gone then
+        ns.Changed()
+    end
+end
 
 local function UpdateFriends()
     if not ready then
@@ -329,10 +440,11 @@ local function UpdateFriends()
         local label = "#" .. id
         nowOnline[label] = true
         if not wasOnline[label] and not Hidden(bnetNames[id]) then
-            HelloTo(bnetNames[id] or label, id)
+            HelloTo(bnetNames[id] or label, id, bnetNames[id] == nil)
         end
     end
     wasOnline = nowOnline
+    PruneCrew()
     if ns.RefreshUI then ns.RefreshUI() end
 end
 
@@ -389,8 +501,12 @@ function Handlers.HI(name, payload, from)
         return
     end
     local now = GetTime()
-    local again = lastHeard[name] and now - lastHeard[name] < 5
+    -- The same hello by the other route (whisper and Battle.net) within a
+    -- few seconds. A different one (say, the full hello after a name-only
+    -- one) is new.
+    local again = lastHeard[name] and now - lastHeard[name] < 5 and lastPayload[name] == payload
     lastHeard[name] = now
+    lastPayload[name] = payload
     if not ns.db.crew[name] then
         ns.db.crew[name] = true
         ns.Changed()
@@ -408,12 +524,30 @@ function Handlers.HI(name, payload, from)
         ns.Changed()
     end
     p.seen = time()
+    -- How we know them, so they leave the list when the friendship ends.
+    if from.bnet then
+        p.bnetTag = bnetTagOf[from.bnet] or p.bnetTag
+    else
+        p.charFriend = true
+    end
     if ns.RefreshUI then ns.RefreshUI() end
     if again or Hidden(name) then
         return -- the same hello by the other route
     end
     if f[2] ~= "1" then
         ns.Send(name, "HI", HelloPayload(true)) -- answer first, then ask
+        if from.bnet then
+            slimTo[from.bnet] = nil
+        end
+    elseif from.bnet and slimTo[from.bnet] then
+        -- They answered our name-only hello: now that we know who it is,
+        -- tell them the rest.
+        slimTo[from.bnet] = nil
+        C_Timer.After(FULL_HELLO_DELAY, ns.Safe(function()
+            if ns.online[name] and not Hidden(name) then
+                ns.Send(name, "HI", HelloPayload(true))
+            end
+        end, "hello"))
     end
     local want = {}
     for i, section in ipairs(ns.SECTIONS) do

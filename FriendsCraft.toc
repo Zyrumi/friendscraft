@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: FriendsCraft
 ## Notes: Share professions, gold, recipes, bags and a shopping list with your friends.
-## Version: 0.3.3
+## Version: 0.4.0
 ## SavedVariables: FriendsCraftDB
 
 Core.lua

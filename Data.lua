@@ -460,6 +460,25 @@ end
 -- Shopping list (each person keeps their own list of what they need)
 -------------------------------------------------------------------------------
 
+-- Friends see what is still open (the "shop" section). What you tick off
+-- stays on your own list, ticked, until you remove it; friends stop seeing it.
+
+-- Ticked-off items of one of your characters: { [itemID] = count }.
+function ns.DoneList(key)
+    local all = ns.db.shopDone
+    if type(all) ~= "table" then
+        all = {}
+        ns.db.shopDone = all
+    end
+    key = key or ns.me
+    if type(all[key]) ~= "table" then
+        all[key] = {}
+    end
+    return all[key]
+end
+
+-- Sets how many you want of an item (0 = take it off). Adding something
+-- you had ticked off opens it again.
 function ns.SetNeed(itemID, count)
     local shop = {}
     for id, c in pairs(ns.Me().shop) do
@@ -467,10 +486,53 @@ function ns.SetNeed(itemID, count)
     end
     if count and count > 0 then
         shop[itemID] = count
+        ns.DoneList()[itemID] = nil
     else
         shop[itemID] = nil
     end
-    SetMine("shop", shop)
+    if not SetMine("shop", shop) and ns.RefreshUI then
+        ns.RefreshUI()
+    end
+end
+
+-- Ticks an item off (done = true) or opens it again.
+function ns.SetDone(itemID, done)
+    local doneList = ns.DoneList()
+    if done then
+        local count = ns.Me().shop[itemID]
+        if count then
+            doneList[itemID] = count
+            ns.SetNeed(itemID, 0)
+        end
+    else
+        local count = doneList[itemID]
+        if count then
+            ns.SetNeed(itemID, count) -- also clears the tick
+        end
+    end
+end
+
+-- Takes an item off your list, open or ticked.
+function ns.RemoveNeed(itemID)
+    ns.DoneList()[itemID] = nil
+    ns.SetNeed(itemID, 0)
+end
+
+-- Removes everything you ticked off.
+function ns.ClearDone()
+    local doneList = ns.DoneList()
+    for id in pairs(doneList) do
+        doneList[id] = nil
+    end
+    ns.Changed()
+    if ns.RefreshUI then ns.RefreshUI() end
+end
+
+-- How many of an item one character has (bags + bank).
+function ns.HaveCount(key, itemID)
+    local p = ns.db.people[key]
+    local c = p and p.items and p.items[itemID]
+    return c and ((c[1] or 0) + (c[2] or 0)) or 0
 end
 
 -------------------------------------------------------------------------------
@@ -489,6 +551,35 @@ function ns.ItemName(id)
         C_Item.RequestLoadItemDataByID(id)
     end
     return name
+end
+
+function ns.ItemIcon(id)
+    local get = (C_Item and C_Item.GetItemIconByID) or GetItemIcon
+    if get and id then
+        local ok, icon = pcall(get, id)
+        if ok and icon and not ns.IsSecret(icon) then
+            return icon
+        end
+    end
+    return 134400 -- question mark icon
+end
+
+-- Item quality (0 grey, 1 white, 2 green, ...) or nil while unknown.
+function ns.ItemQuality(id)
+    local get = C_Item and C_Item.GetItemQualityByID
+    if get then
+        local ok, q = pcall(get, id)
+        if ok and type(q) == "number" and not ns.IsSecret(q) then
+            return q
+        end
+    end
+    if GetItemInfo then
+        local ok, _, _, q = pcall(GetItemInfo, id)
+        if ok and type(q) == "number" and not ns.IsSecret(q) then
+            return q
+        end
+    end
+    return nil
 end
 
 -- Finds an item ID from a link or a (part of a) name the crew knows about.

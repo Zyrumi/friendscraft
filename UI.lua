@@ -1344,6 +1344,213 @@ end
 -- Shopping list
 -------------------------------------------------------------------------------
 
+local SHOP_ROW_H = 40
+local SHOP_BAR_W = 140
+
+-- A bar showing how many of the wanted amount someone has. The numbers are
+-- always written on it, never color alone.
+local function ProgressBar(parent)
+    local bar = CreateFrame("StatusBar", nil, parent)
+    bar:SetSize(SHOP_BAR_W, 16)
+    bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bar:SetMinMaxValues(0, 1)
+    local bg = bar:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0, 0, 0, 0.55)
+    local edge = bar:CreateTexture(nil, "BORDER")
+    edge:SetPoint("TOPLEFT", -1, 1)
+    edge:SetPoint("BOTTOMRIGHT", 1, -1)
+    edge:SetColorTexture(0.45, 0.4, 0.3, 0.8)
+    bar.text = Ink(bar, "GameFontHighlightSmall")
+    bar.text:SetPoint("CENTER", 0, 0)
+    bar.text:SetJustifyH("CENTER")
+    -- above the fill and its background
+    local holder = CreateFrame("Frame", nil, bar)
+    holder:SetAllPoints()
+    bar.text:SetParent(holder)
+    return bar
+end
+
+local function SmallButton(parent, text, width, onClick)
+    local b = Button(parent, text, width or 22, onClick)
+    b:SetHeight(20)
+    b:RegisterForClicks("LeftButtonUp")
+    return b
+end
+
+-- A red cross button (the loot window's "pass" cross), "X" if the game
+-- doesn't have that picture.
+local function RemoveButton(parent, onClick)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(20, 20)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetAllPoints()
+    if not UseFile(b.icon, "Interface\\Buttons\\UI-GroupLoot-Pass-Up") then
+        b.icon:Hide()
+        b.label = Ink(b, "GameFontNormal", "X", { 1, 0.35, 0.3 })
+        b.label:SetPoint("CENTER")
+    end
+    local hl = b:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    if not UseFile(hl, "Interface\\Buttons\\UI-GroupLoot-Pass-Highlight") then
+        hl:SetColorTexture(1, 1, 1, 0.2)
+    end
+    hl:SetBlendMode("ADD")
+    b:SetScript("OnClick", onClick)
+    b:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Remove from your list", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    return b
+end
+
+-- One row: either a person's heading or one item on their list.
+local function ShopRow(parent)
+    local row = CreateFrame("Button", nil, parent)
+    RowScripts(row)
+
+    -- heading
+    row.hClass = row:CreateTexture(nil, "ARTWORK")
+    row.hClass:SetSize(20, 20)
+    row.hClass:SetPoint("BOTTOMLEFT", 6, 6)
+    row.hText = Ink(row, "GameFontNormalLarge", "", GOLD)
+    row.hText:SetPoint("LEFT", row.hClass, "RIGHT", 6, 0)
+    row.hCount = Ink(row, "GameFontHighlightSmall", "", INK_DIM)
+    row.hCount:SetPoint("LEFT", row.hText, "RIGHT", 10, -1)
+    row.hLine = row:CreateTexture(nil, "ARTWORK")
+    row.hLine:SetHeight(1)
+    row.hLine:SetPoint("BOTTOMLEFT", 4, 1)
+    row.hLine:SetPoint("BOTTOMRIGHT", -4, 1)
+    row.hLine:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.35)
+
+    -- item
+    row.check = CheckButton(row)
+    row.check:SetSize(26, 26)
+    row.check:SetPoint("LEFT", 4, 0)
+    row.check:SetScript("OnClick", function(self)
+        local e = row.item and row.item.entry
+        if e then
+            local on = self:GetChecked() and true or false
+            CheckSound(on)
+            GameTooltip:Hide()
+            ns.SetDone(e.id, on)
+        end
+    end)
+    row.check:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(self:GetChecked() and "Open it again" or "Got it: tick it off", 1, 1, 1)
+        GameTooltip:AddLine("Friends only see what is still open.", INK_DIM[1], INK_DIM[2], INK_DIM[3], true)
+        GameTooltip:Show()
+    end)
+    row.check:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(30, 30)
+    row.icon:SetPoint("LEFT", 34, 0)
+    row.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    row.iconEdge = row:CreateTexture(nil, "BORDER")
+    row.iconEdge:SetPoint("TOPLEFT", row.icon, -1, 1)
+    row.iconEdge:SetPoint("BOTTOMRIGHT", row.icon, 1, -1)
+    row.iconEdge:SetColorTexture(0, 0, 0, 0.8)
+
+    row.remove = RemoveButton(row, function()
+        local e = row.item and row.item.entry
+        if e then
+            GameTooltip:Hide()
+            ns.RemoveNeed(e.id)
+        end
+    end)
+    row.remove:SetPoint("RIGHT", -6, 0)
+    local function Change(delta)
+        local e = row.item and row.item.entry
+        if e then
+            local step = IsShiftKeyDown and IsShiftKeyDown() and 5 or 1
+            ns.SetNeed(e.id, math.max(1, math.min(9999, e.want + delta * step)))
+        end
+    end
+    row.plus = SmallButton(row, "+", 22, function() Change(1) end)
+    row.plus:SetPoint("RIGHT", row.remove, "LEFT", -6, 0)
+    row.minus = SmallButton(row, "-", 22, function() Change(-1) end)
+    row.minus:SetPoint("RIGHT", row.plus, "LEFT", -2, 0)
+    for _, b in ipairs({ row.plus, row.minus }) do
+        b:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self == row.plus and "Want more" or "Want fewer", 1, 1, 1)
+            GameTooltip:AddLine("Shift-click: 5 at a time.", INK_DIM[1], INK_DIM[2], INK_DIM[3])
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+    row.bar = ProgressBar(row)
+    row.bar:SetPoint("RIGHT", row.minus, "LEFT", -10, 0)
+
+    row.name = Ink(row, "GameFontHighlight")
+    row.name:SetPoint("TOPLEFT", row.icon, "TOPRIGHT", 8, -1)
+    row.name:SetPoint("RIGHT", row.bar, "LEFT", -10, 0)
+    row.name:SetWordWrap(false)
+    row.sub = Ink(row, "GameFontHighlightSmall", "", INK_DIM)
+    row.sub:SetPoint("BOTTOMLEFT", row.icon, "BOTTOMRIGHT", 8, 1)
+    row.sub:SetPoint("RIGHT", row.bar, "LEFT", -10, 0)
+    row.sub:SetWordWrap(false)
+    return row
+end
+
+local function FillShopRow(row, item)
+    local heading = item.kind == "heading"
+    for _, part in ipairs({ row.hClass, row.hText, row.hCount, row.hLine }) do
+        part:SetShown(heading)
+    end
+    for _, part in ipairs({ row.check, row.icon, row.iconEdge, row.remove, row.plus, row.minus, row.bar, row.name, row.sub }) do
+        part:SetShown(not heading)
+    end
+    if row.stripe then
+        row.stripe:SetAlpha(heading and 0 or 1)
+    end
+    if heading then
+        SetClassIcon(row.hClass, item.class)
+        row.hText:SetText(item.text)
+        row.hCount:SetText(item.count or "")
+        return
+    end
+
+    local e = item.entry
+    row.icon:SetTexture(ns.ItemIcon(e.id))
+    row.icon:SetDesaturated(e.done)
+    row.icon:SetAlpha(e.done and 0.6 or 1)
+    local q = ns.ItemQuality(e.id)
+    local qc = q and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q]
+    if e.done then
+        row.name:SetText(e.name .. "  " .. INK_DIM_HEX .. "(got it)|r")
+        row.name:SetTextColor(INK_DIM[1], INK_DIM[2], INK_DIM[3])
+    else
+        row.name:SetText(e.want .. " x " .. e.name)
+        if qc then
+            row.name:SetTextColor(qc.r, qc.g, qc.b)
+        else
+            row.name:SetTextColor(INK[1], INK[2], INK[3])
+        end
+    end
+    row.sub:SetText(item.sub or "")
+
+    row.check:SetShown(e.editable)
+    row.check:SetChecked(e.done)
+    row.remove:SetShown(e.editable)
+    row.plus:SetShown(e.editable and not e.done)
+    row.minus:SetShown(e.editable and not e.done)
+
+    row.bar:SetShown(not e.done)
+    if not e.done then
+        local enough = e.have >= e.want
+        row.bar:SetMinMaxValues(0, math.max(1, e.want))
+        row.bar:SetValue(math.min(e.have, e.want))
+        local c = enough and GOOD or INFO
+        row.bar:SetStatusBarColor(c[1], c[2], c[3], 0.85)
+        row.bar.text:SetText(enough and (e.have .. " / " .. e.want .. "  enough") or (e.have .. " / " .. e.want))
+    end
+end
+
 local function BuildShopPage()
     local page = NewPage("shop")
     local addW, countW = 60, 80
@@ -1368,76 +1575,144 @@ local function BuildShopPage()
         page.count.UpdateHint()
     end)
     add:SetPoint("LEFT", page.count, "RIGHT", 8, 0)
+    page.clear = Button(page.frame, "Clear ticked", 110, function() ns.ClearDone() end)
+    page.clear:SetPoint("TOPRIGHT", -14, -4)
     page.item:SetScript("OnEnterPressed", function() page.count:SetFocus() end)
     page.count:SetScript("OnEnterPressed", function() add:Click() end)
     page.item:SetScript("OnTextChanged", function(self) self.UpdateHint() end)
     page.count:SetScript("OnTextChanged", function(self) self.UpdateHint() end)
     page.status = Status(page)
-    page.list = ScrollList(page.frame, ROW_H, TextRow, FillTextRow)
-    page.list.frame:SetPoint("TOPLEFT", 0, -32)
+    page.list = ScrollList(page.frame, SHOP_ROW_H, ShopRow, FillShopRow)
+    page.list.frame:SetPoint("TOPLEFT", 0, -34)
     page.list.frame:SetPoint("BOTTOMRIGHT", 0, 22)
     ns.shopItemBox = page.item
 
+    -- "Gigi 12, Emoolia 3. Can make it: Tom"
+    local function SubLine(e)
+        local parts = {}
+        if not e.mine then
+            local mineHave = ns.HaveCount(ns.me, e.id)
+            if mineHave > 0 then
+                parts[#parts + 1] = "|cff66e066You have " .. mineHave .. "|r"
+            end
+        end
+        local others = {}
+        for _, h in ipairs(ns.Holders(e.id)) do
+            if h.key ~= e.key and h.key ~= ns.me then
+                others[#others + 1] = h
+            end
+        end
+        if #others > 0 then
+            parts[#parts + 1] = "Has some: " .. JoinHolders(others, 3)
+        end
+        local makers = {}
+        for _, m in ipairs(ns.Crafters(e.id)) do
+            if m.key ~= e.key then
+                makers[#makers + 1] = Who(m.key)
+            end
+        end
+        if #makers > 0 then
+            parts[#parts + 1] = "Can make it: " .. table.concat(makers, ", ")
+        end
+        if #parts == 0 then
+            return e.mine and not e.done and "Nobody else has any yet." or ""
+        end
+        return table.concat(parts, "   ")
+    end
+
+    local function Tooltip(e)
+        return function(tt)
+            tt:SetText(e.name, 1, 1, 1)
+            if e.done then
+                tt:AddLine("Ticked off. Friends no longer see it.", INK_DIM[1], INK_DIM[2], INK_DIM[3], true)
+            else
+                tt:AddLine(Who(e.key) .. " wants " .. e.want .. ", has " .. e.have .. ".", 1, 1, 1)
+            end
+            local others = {}
+            for _, h in ipairs(ns.Holders(e.id)) do
+                if h.key ~= e.key then others[#others + 1] = h end
+            end
+            if #others > 0 then
+                tt:AddLine("Has some: " .. JoinHolders(others), INFO[1], INFO[2], INFO[3], true)
+            end
+            local makers = ns.Crafters(e.id)
+            if #makers > 0 then
+                local names = {}
+                for _, m in ipairs(makers) do names[#names + 1] = Who(m.key) end
+                tt:AddLine("Can make it: " .. table.concat(names, ", "), GOOD[1], GOOD[2], GOOD[3], true)
+            end
+        end
+    end
+
     function page:Refresh()
-        local entries = {}
+        -- Everyone with something on their list: you first, then your
+        -- alts, then friends.
+        local people = {}
         for _, key in ipairs(ns.VisiblePeople()) do
             local p = ns.db.people[key]
+            local entries = {}
+            local editable = key == ns.me
             for id, want in pairs(p and p.shop or {}) do
-                entries[#entries + 1] = { key = key, id = id, want = want, name = ns.ItemName(id) or ("item " .. id) }
+                entries[#entries + 1] = { key = key, id = id, want = want, done = false }
             end
-        end
-        table.sort(entries, function(a, b)
-            if a.name ~= b.name then return a.name < b.name end
-            return a.key < b.key
-        end)
-        local items = {}
-        for _, e in ipairs(entries) do
-            local have, others = 0, {}
-            for _, h in ipairs(ns.Holders(e.id)) do
-                if h.key == e.key then
-                    have = h.bags + h.bank
-                else
-                    others[#others + 1] = h
+            if p and p.mine then
+                for id, want in pairs(ns.DoneList(key)) do
+                    if not (p.shop and p.shop[id]) then
+                        entries[#entries + 1] = { key = key, id = id, want = want, done = true }
+                    end
                 end
             end
-            local done = have >= e.want
-            local text
-            if done then
-                text = string.format("%s: %d %s (done)", Who(e.key), e.want, e.name)
-            else
-                text = string.format("%s: %d %s (%d to go)", Who(e.key), e.want, e.name, e.want - have)
+            if #entries > 0 then
+                for _, e in ipairs(entries) do
+                    e.name = ns.ItemName(e.id) or ("item " .. e.id)
+                    e.have = ns.HaveCount(key, e.id)
+                    e.mine = p and p.mine or key == ns.me
+                    e.editable = editable
+                end
+                table.sort(entries, function(a, b)
+                    if a.done ~= b.done then return not a.done end
+                    if a.name ~= b.name then return a.name < b.name end
+                    return a.id < b.id
+                end)
+                people[#people + 1] = { key = key, p = p, entries = entries,
+                    rank = key == ns.me and 0 or (p and p.mine) and 1 or 2 }
             end
-            local mine = e.key == ns.me
-            items[#items + 1] = {
-                text = text,
-                color = done and INK_GOOD or INK,
-                tooltip = function(tt)
-                    tt:SetText(e.name, 1, 1, 1)
-                    tt:AddLine(Who(e.key) .. " wants " .. e.want .. ", has " .. have .. ".", 1, 1, 1)
-                    if #others > 0 then
-                        tt:AddLine("Others who have some: " .. JoinHolders(others), INFO[1], INFO[2], INFO[3], true)
-                    end
-                    local makers = ns.Crafters(e.id)
-                    if #makers > 0 then
-                        local names = {}
-                        for _, m in ipairs(makers) do names[#names + 1] = Who(m.key) end
-                        tt:AddLine("Can make it: " .. table.concat(names, ", "), GOOD[1], GOOD[2], GOOD[3], true)
-                    end
-                    if mine then
-                        tt:AddLine("Click to take it off your list.", 1, 0.82, 0)
-                    end
-                end,
-                onClick = mine and function(button)
-                    if button == "LeftButton" then
-                        GameTooltip:Hide()
-                        ns.SetNeed(e.id, 0)
-                    end
-                end or nil,
-            }
         end
+        table.sort(people, function(a, b)
+            if a.rank ~= b.rank then return a.rank < b.rank end
+            return Who(a.key) < Who(b.key)
+        end)
+
+        local items, ticked = {}, 0
+        for _, person in ipairs(people) do
+            local open = 0
+            for _, e in ipairs(person.entries) do
+                if not e.done then open = open + 1 end
+                if e.done and person.key == ns.me then ticked = ticked + 1 end
+            end
+            local title
+            if person.key == ns.me then
+                title = "Your list"
+            elseif person.p and person.p.mine then
+                title = Who(person.key)
+            else
+                title = Who(person.key) .. " needs"
+            end
+            items[#items + 1] = {
+                kind = "heading",
+                text = title,
+                class = person.p and person.p.class,
+                count = open == 1 and "1 open" or (open .. " open"),
+            }
+            for _, e in ipairs(person.entries) do
+                items[#items + 1] = { kind = "item", entry = e, sub = SubLine(e), tooltip = Tooltip(e) }
+            end
+        end
+        page.clear:SetShown(ticked > 0)
+        page.clear:SetText(ticked > 0 and ("Clear ticked (" .. ticked .. ")") or "Clear ticked")
         self.status:SetText(#items == 0
-            and "Nothing on anyone's list yet. Friends see what you add."
-            or "Hover an item to see who has some. Click your own item to remove it.")
+            and "Nothing on anyone's list yet. Add what you need above; friends see it."
+            or "Tick what you've got. + and - change how many, the cross removes it. Friends see what is still open.")
         self.list:SetItems(items)
     end
     return page

@@ -21,6 +21,7 @@ local DEFAULTS = {
     tag = false,     -- random tag shared by all your characters (see below)
     window = {},     -- size and place of the window
     view = {},       -- sort order and filters on the Crew page
+    shopDone = {},   -- [your character] = { [itemID] = count } ticked off the shopping list (not shared)
 }
 
 -------------------------------------------------------------------------------

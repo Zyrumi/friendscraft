@@ -17,6 +17,7 @@ Nothing to set up. Friends who also have FriendsCraft show up by themselves:
 - When you log in, FriendsCraft quietly says hello to your online friends. Everyone who has it joins your crew.
 - A friend's other characters show up too, grouped under that friend, once they log in on any of them. You only need to be friends with one of their characters.
 - Only friends see your data. Someone who is not on your friends list gets nothing.
+- Your list follows your friends lists: remove someone as a friend and they leave your list, with what they shared.
 
 ## What you get
 
@@ -24,7 +25,7 @@ Open the window with the button on the minimap or by typing `/fc`. Drag the bott
 
 - **Crew:** a table of everyone, sortable by name, level or gold (click a column title). A friend with several characters is one line showing their best skill in each profession; click it to see each character. Filter by name, online only, faction or profession. Characters of the other faction are faded and show their faction crest. Hover an icon to see the full skill (for example 44 / 75). A "!" means it is time to visit a trainer.
 - **Recipes:** pick a profession on the left to see its recipes on the right, or search all recipes at once. Hover a recipe to see the materials and who in the crew has them.
-- **Shopping list:** add what you need ("12 Peacebloom"). Everyone sees it, with how many you still need and who already has some. Click your own item to remove it.
+- **Shopping list:** add what you need ("12 Peacebloom"). Your list comes first, then each friend's under their name. Every item shows its icon, a bar with how many you have of how many you want, and who in the crew has some or can make it. On your own items: tick the box when you've got it, use + and - to change how many (shift-click: 5 at a time), and the cross to remove it. Friends see what is still open; ticked items stay on your list until you remove them or click "Clear ticked".
 - **Who has it:** search everyone's bags and banks.
 - **Item tooltips:** hover any item in the game to see who in the crew has it, who needs it and who can make it.
 - **Settings:** turn the minimap button or the item tooltip lines off (Settings tab, or type `/fc settings`).
