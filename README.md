@@ -22,7 +22,7 @@ Friends who also have FriendsCraft find you by themselves, and you choose who to
 
 ## What you get
 
-Open the window with the button on the minimap or by typing `/fc`. Drag the bottom right corner to make it bigger; it remembers its size and place.
+Open the window with the button on the minimap or by typing `/fc`. Pick its size (Small, Normal or Large) on the Settings tab; it remembers its size and place.
 
 - **Crew:** a table of everyone, sortable by name, level or gold (click a column title). A friend with several characters is one line showing their best skill in each profession; click it to see each character. Filter by name, online only, faction or profession. Characters of the other faction are faded and show their faction crest. Hover an icon to see the full skill (for example 44 / 75). A "!" means it is time to visit a trainer.
 - **Recipes:** pick a profession on the left to see its recipes on the right, or search all recipes at once. Hover a recipe to see the materials and who in the crew has them.

@@ -2,7 +2,7 @@
 -- The window uses the game's own panel frame (with a round portrait) when
 -- the game has it, and a plain dark panel otherwise. Pages are picked with
 -- icon tabs on the left side, like the game's own side tabs. The window can
--- be moved and resized; lists scroll.
+-- be moved; its size is one of a few set sizes (Settings); lists scroll.
 
 local ADDON_NAME, ns = ...
 
@@ -11,9 +11,6 @@ local ADDON_NAME, ns = ...
 -------------------------------------------------------------------------------
 
 local ROW_H = 22            -- list rows
-local DEFAULT_W, DEFAULT_H = 780, 500
-local MIN_W, MIN_H = 640, 380
-local MAX_W, MAX_H = 1400, 1000
 local NAME_W = 236          -- crew: chevron, online mark, class icon, name, faction
 local LEVEL_W = 44
 local GOLD_W = 96
@@ -27,8 +24,18 @@ local SECONDARY = {
 }
 local PRIM_X = NAME_W + LEVEL_W + GOLD_W + 16
 local SEC_X = PRIM_X + PRIM_SLOTS * SLOT_W + 12
-local BASE_SCALE = 1.15     -- text and rows at the default window height
-local MAX_SCALE = 1.9       -- taller windows grow the text up to this
+-- The window comes in set sizes (picked in Settings). Each one zooms
+-- everything inside and is exactly as wide as the Crew table needs, so no
+-- column can end up outside the window.
+local TABLE_W = SEC_X + #SECONDARY * SLOT_W + 26 -- the Crew table at zoom 1, with its scroll bar
+local SIDE_PAD = 24         -- window edge and inset left and right of the content
+local BASE_H = 435          -- window height at zoom 1
+local SIZES = {
+    { key = "small", label = "Small", scale = 1.0 },
+    { key = "normal", label = "Normal", scale = 1.15 },
+    { key = "large", label = "Large", scale = 1.4 },
+}
+local DEFAULT_SIZE = "normal"
 local INDEX_W = 190         -- recipes: profession list
 local ICON = "Interface\\Icons\\INV_Relics_LibramOfHope"
 
@@ -2181,6 +2188,20 @@ local function BuildSettingsPage()
     for i, b in ipairs(page.boxes) do
         b:SetPoint("TOPLEFT", 8, -32 - (i - 1) * 60)
     end
+    -- Window size: one button per size; the one in use is greyed out and
+    -- named in the line above the buttons.
+    local sizeTop = -32 - #page.boxes * 60
+    page.sizeLabel = Ink(page.frame, "GameFontHighlight", "Window size")
+    page.sizeLabel:SetPoint("TOPLEFT", 12, sizeTop - 4)
+    page.sizeButtons = {}
+    for i, size in ipairs(SIZES) do
+        local b = Button(page.frame, size.label, 84, function()
+            ns.SetWindowSize(size.key)
+        end)
+        b:SetPoint("TOPLEFT", 12 + (i - 1) * 90, sizeTop - 24)
+        b.sizeKey = size.key
+        page.sizeButtons[i] = b
+    end
     local version = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
         or (GetAddOnMetadata and GetAddOnMetadata(ADDON_NAME, "Version"))
     if type(version) == "string" and version ~= "" then
@@ -2195,7 +2216,7 @@ local function BuildSettingsPage()
         "Hidden people: on the Crew page, click \"Show hidden\" to see them and right-click to bring them back.",
         "Recipes: open each profession window once so your recipes are shared.",
         "Bank: updates when you visit a bank.",
-        "Type /fc to open the window from anywhere. Drag the corner to make it bigger.",
+        "Type /fc to open the window from anywhere. Its size is picked here in Settings.",
     }, "\n\n"), INK)
     notes:SetPoint("TOPLEFT", 380, -32)
     notes:SetPoint("RIGHT", -16, 0)
@@ -2204,6 +2225,11 @@ local function BuildSettingsPage()
     function page:Refresh()
         for _, b in ipairs(self.boxes) do
             b.Sync()
+        end
+        local current = ns.WindowSize()
+        self.sizeLabel:SetText("Window size: " .. current.label)
+        for _, b in ipairs(self.sizeButtons) do
+            b:SetEnabled(b.sizeKey ~= current.key)
         end
     end
     return page
@@ -2296,10 +2322,55 @@ end
 
 local function SavePlace()
     local point, _, relPoint, x, y = window:GetPoint()
-    local w, h = window:GetWidth(), window:GetHeight()
-    if point and type(w) == "number" then
-        ns.db.window = { point = point, relPoint = relPoint, x = x, y = y, w = w, h = h }
+    if point then
+        local size = type(ns.db.window) == "table" and ns.db.window.size or nil
+        ns.db.window = { point = point, relPoint = relPoint, x = x, y = y, size = size }
     end
+end
+
+-- The size in use (one of SIZES).
+function ns.WindowSize()
+    local key = type(ns.db.window) == "table" and ns.db.window.size or DEFAULT_SIZE
+    for _, size in ipairs(SIZES) do
+        if size.key == key then
+            return size
+        end
+    end
+    return SIZES[2]
+end
+
+-- Gives the window its size: the window itself and the zoom of everything
+-- in it. A size too big for the screen falls back to the next smaller one.
+local function ApplyWindowSize()
+    if not window or not content then
+        return
+    end
+    local size = ns.WindowSize()
+    local screenW = UIParent and UIParent.GetWidth and UIParent:GetWidth()
+    local screenH = UIParent and UIParent.GetHeight and UIParent:GetHeight()
+    local scale = size.scale
+    for i = #SIZES, 1, -1 do
+        local s = SIZES[i].scale
+        if s <= size.scale then
+            scale = s
+            local fitsW = type(screenW) ~= "number" or screenW <= 0 or TABLE_W * s + SIDE_PAD + 60 <= screenW
+            local fitsH = type(screenH) ~= "number" or screenH <= 0 or BASE_H * s + 40 <= screenH
+            if fitsW and fitsH then
+                break
+            end
+        end
+    end
+    window:SetSize(math.floor(TABLE_W * scale + SIDE_PAD + 0.5), math.floor(BASE_H * scale + 0.5))
+    content:SetScale(scale)
+end
+
+function ns.SetWindowSize(key)
+    if type(ns.db.window) ~= "table" then
+        ns.db.window = {}
+    end
+    ns.db.window.size = key
+    ApplyWindowSize()
+    ns.RefreshUI(true)
 end
 
 local function BuildWindow()
@@ -2323,11 +2394,7 @@ local function BuildWindow()
     end
     window = f
     local place = ns.db.window or {}
-    local function Clamp(v, lo, hi, default)
-        v = tonumber(v) or default
-        return math.max(lo, math.min(hi, v))
-    end
-    f:SetSize(Clamp(place.w, MIN_W, MAX_W, DEFAULT_W), Clamp(place.h, MIN_H, MAX_H, DEFAULT_H))
+    f:SetSize(TABLE_W * 1.15 + SIDE_PAD, BASE_H * 1.15) -- set properly once the content exists
     if place.point then
         f:SetPoint(place.point, UIParent, place.relPoint or place.point, tonumber(place.x) or 0, tonumber(place.y) or 0)
     else
@@ -2359,43 +2426,9 @@ local function BuildWindow()
         end
     end
 
-    -- Drag the bottom right corner to resize.
-    f:SetResizable(true)
-    if f.SetResizeBounds then
-        f:SetResizeBounds(MIN_W, MIN_H, MAX_W, MAX_H)
-    elseif f.SetMinResize then
-        f:SetMinResize(MIN_W, MIN_H)
-        f:SetMaxResize(MAX_W, MAX_H)
-    end
-    local grip = CreateFrame("Button", nil, f)
-    grip:SetSize(16, 16)
-    grip:SetPoint("BOTTOMRIGHT", -3, 3)
-    grip:SetFrameLevel(f:GetFrameLevel() + 20)
-    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
-    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-    grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
-    grip:SetScript("OnMouseUp", function()
-        f:StopMovingOrSizing()
-        SavePlace()
-        ns.RefreshUI(true)
-    end)
-
+    -- The size is one of a few set sizes, picked in Settings.
     content = CreateFrame("Frame", nil, f)
-    -- Everything inside grows with the window's height (wider windows
-    -- show more professions instead).
-    local function ApplyScale()
-        local h = f:GetHeight()
-        if type(h) ~= "number" or h <= 0 then
-            h = DEFAULT_H
-        end
-        content:SetScale(BASE_SCALE * math.max(1, math.min(MAX_SCALE / BASE_SCALE, h / DEFAULT_H)))
-    end
-    ApplyScale()
-    f:SetScript("OnSizeChanged", function()
-        ApplyScale()
-        ns.RefreshUI()
-    end)
+    ApplyWindowSize()
     if framed and type(f.Inset) == "table" then
         content:SetPoint("TOPLEFT", f.Inset, "TOPLEFT", 6, -6)
         content:SetPoint("BOTTOMRIGHT", f.Inset, "BOTTOMRIGHT", -6, 6)
