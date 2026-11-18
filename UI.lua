@@ -27,7 +27,14 @@ local SEC_X = PRIM_X + PRIM_SLOTS * SLOT_W + 12
 -- The window comes in set sizes (picked in Settings). Each one zooms
 -- everything inside and is exactly as wide as the Crew table needs, so no
 -- column can end up outside the window.
-local TABLE_W = SEC_X + #SECONDARY * SLOT_W + 26 -- the Crew table at zoom 1, with its scroll bar
+-- The Crew table's width at zoom 1, with its scroll bar. The secondary
+-- profession columns only count while they are shown.
+local function TableWidth()
+    if ns.ShowSecondary() then
+        return SEC_X + #SECONDARY * SLOT_W + 26
+    end
+    return SEC_X + 14
+end
 local SIDE_PAD = 24         -- window edge and inset left and right of the content
 local BASE_H = 435          -- window height at zoom 1
 local SIZES = {
@@ -685,6 +692,12 @@ local function CrewRow(parent)
     return row
 end
 
+-- Cooking, first aid and fishing are hidden on the Crew page unless you
+-- switch them on (Profession menu).
+function ns.ShowSecondary()
+    return ns.db and type(ns.db.view) == "table" and ns.db.view.secondary == true
+end
+
 local function SecondaryIndex(e)
     for i, sec in ipairs(SECONDARY) do
         if e.line == sec.line or e.name == sec.name then
@@ -692,6 +705,10 @@ local function SecondaryIndex(e)
         end
     end
     return nil
+end
+
+function ns.IsSecondary(e)
+    return SecondaryIndex(e) ~= nil
 end
 
 local function FillSlot(s, e, item, text)
@@ -771,8 +788,9 @@ local function FillCrewRow(row, item)
             primary[#primary + 1] = e
         end
     end
+    local showSec = ns.ShowSecondary()
     for i, s in ipairs(row.sec) do
-        FillSlot(s, sec[i], item)
+        FillSlot(s, showSec and sec[i] or nil, item)
     end
     local fit = PRIM_SLOTS
     for i, s in ipairs(row.slots) do
@@ -823,7 +841,9 @@ local function GroupTooltip(tt, item)
         tt:AddLine("Gold, all characters: " .. MoneyText(item.gold, true), 1, 1, 1)
     end
     for _, e in ipairs(item.profs) do
-        tt:AddLine(string.format("%s %d / %d (%s)", e.name, e.rank, e.max, ns.ShortName(e.owner)), 0.9, 0.9, 0.9)
+        if ns.ShowSecondary() or not ns.IsSecondary(e) then
+            tt:AddLine(string.format("%s %d / %d (%s)", e.name, e.rank, e.max, ns.ShortName(e.owner)), 0.9, 0.9, 0.9)
+        end
     end
     if item.hint then
         tt:AddLine(item.hint, 1, 0.82, 0, true)
@@ -925,11 +945,26 @@ local function BuildCrewPage()
         page.prof = name
         Redraw()
     end
+    local function SecondaryCheckbox(root)
+        if root.CreateDivider then
+            root:CreateDivider()
+        end
+        if root.CreateCheckbox then
+            root:CreateCheckbox("Show cooking, first aid and fishing", ns.ShowSecondary, function()
+                view.secondary = not ns.ShowSecondary()
+                if ns.RefreshWindowSize then
+                    ns.RefreshWindowSize()
+                end
+                Redraw()
+            end)
+        end
+    end
     page.profDrop = Dropdown(page.bar, 170, function(_, root)
         root:CreateRadio("Any profession", function() return page.prof == nil end, function() PickProf(nil) end)
         for _, name in ipairs(page.profNames or {}) do
             root:CreateRadio(name, function() return page.prof == name end, function() PickProf(name) end)
         end
+        SecondaryCheckbox(root)
     end)
     if page.profDrop then
         page.profDrop:SetPoint("LEFT", page.toggles[#page.toggles].label, "RIGHT", 16, 0)
@@ -946,6 +981,7 @@ local function BuildCrewPage()
                 for _, name in ipairs(names) do
                     root:CreateRadio(name, function() return page.prof == name end, function() Pick(name) end)
                 end
+                SecondaryCheckbox(root)
             end)
             if ok then
                 return
@@ -1005,8 +1041,10 @@ local function BuildCrewPage()
     goldHeader.label:ClearAllPoints()
     goldHeader.label:SetPoint("RIGHT", -2, 0)
     -- One icon per secondary profession column (hover for its name).
+    page.secHeaders = {}
     for i, sec in ipairs(SECONDARY) do
         local b = CreateFrame("Button", nil, header)
+        page.secHeaders[i] = b
         b:SetSize(16, 16)
         b:SetPoint("LEFT", SEC_X + 1 + (i - 1) * SLOT_W, 0)
         local icon = b:CreateTexture(nil, "ARTWORK")
@@ -1039,7 +1077,7 @@ local function BuildCrewPage()
             return true
         end
         for _, e in ipairs(p.prof or {}) do
-            if e.name:lower():find(text, 1, true) then
+            if (ns.ShowSecondary() or not ns.IsSecondary(e)) and e.name:lower():find(text, 1, true) then
                 return true
             end
         end
@@ -1072,6 +1110,9 @@ local function BuildCrewPage()
         end
         local text = strtrim(self.search:GetText() or ""):lower()
         local myFaction = ns.Me().faction
+        for _, b in ipairs(self.secHeaders or {}) do
+            b:SetShown(ns.ShowSecondary())
+        end
         local function Other(p)
             return p.faction ~= nil and myFaction ~= nil and p.faction ~= myFaction
         end
@@ -1092,7 +1133,7 @@ local function BuildCrewPage()
             table.insert(groups[g].members, key)
             local p = ns.db.people[key]
             for _, e in ipairs(p and p.prof or {}) do
-                if not seenProf[e.name] then
+                if not seenProf[e.name] and (ns.ShowSecondary() or not ns.IsSecondary(e)) then
                     seenProf[e.name] = true
                     profNames[#profNames + 1] = e.name
                 end
@@ -2353,16 +2394,17 @@ local function ApplyWindowSize()
         local s = SIZES[i].scale
         if s <= size.scale then
             scale = s
-            local fitsW = type(screenW) ~= "number" or screenW <= 0 or TABLE_W * s + SIDE_PAD + 60 <= screenW
+            local fitsW = type(screenW) ~= "number" or screenW <= 0 or TableWidth() * s + SIDE_PAD + 60 <= screenW
             local fitsH = type(screenH) ~= "number" or screenH <= 0 or BASE_H * s + 40 <= screenH
             if fitsW and fitsH then
                 break
             end
         end
     end
-    window:SetSize(math.floor(TABLE_W * scale + SIDE_PAD + 0.5), math.floor(BASE_H * scale + 0.5))
+    window:SetSize(math.floor(TableWidth() * scale + SIDE_PAD + 0.5), math.floor(BASE_H * scale + 0.5))
     content:SetScale(scale)
 end
+ns.RefreshWindowSize = ApplyWindowSize
 
 function ns.SetWindowSize(key)
     if type(ns.db.window) ~= "table" then
@@ -2394,7 +2436,7 @@ local function BuildWindow()
     end
     window = f
     local place = ns.db.window or {}
-    f:SetSize(TABLE_W * 1.15 + SIDE_PAD, BASE_H * 1.15) -- set properly once the content exists
+    f:SetSize(TableWidth() * 1.15 + SIDE_PAD, BASE_H * 1.15) -- set properly once the content exists
     if place.point then
         f:SetPoint(place.point, UIParent, place.relPoint or place.point, tonumber(place.x) or 0, tonumber(place.y) or 0)
     else
