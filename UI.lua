@@ -27,13 +27,16 @@ local SEC_X = PRIM_X + PRIM_SLOTS * SLOT_W + 12
 -- The window comes in set sizes (picked in Settings). Each one zooms
 -- everything inside and is exactly as wide as the Crew table needs, so no
 -- column can end up outside the window.
--- The Crew table's width at zoom 1, with its scroll bar. The secondary
--- profession columns only count while they are shown.
-local function TableWidth()
+-- The Crew table's width at zoom 1, with its scroll bar.
+local FULL_W = SEC_X + #SECONDARY * SLOT_W + 26
+-- With cooking, first aid and fishing hidden the table is narrower. The
+-- window keeps its width and everything inside is zoomed in by this much
+-- to fill it (the window grows taller by the same amount).
+local function ExtraZoom()
     if ns.ShowSecondary() then
-        return SEC_X + #SECONDARY * SLOT_W + 26
+        return 1
     end
-    return SEC_X + 14
+    return FULL_W / (SEC_X + 14)
 end
 local SIDE_PAD = 24         -- window edge and inset left and right of the content
 local BASE_H = 435          -- window height at zoom 1
@@ -2390,19 +2393,20 @@ local function ApplyWindowSize()
     local screenW = UIParent and UIParent.GetWidth and UIParent:GetWidth()
     local screenH = UIParent and UIParent.GetHeight and UIParent:GetHeight()
     local scale = size.scale
+    local extra = ExtraZoom()
     for i = #SIZES, 1, -1 do
         local s = SIZES[i].scale
         if s <= size.scale then
             scale = s
-            local fitsW = type(screenW) ~= "number" or screenW <= 0 or TableWidth() * s + SIDE_PAD + 60 <= screenW
-            local fitsH = type(screenH) ~= "number" or screenH <= 0 or BASE_H * s + 40 <= screenH
+            local fitsW = type(screenW) ~= "number" or screenW <= 0 or FULL_W * s + SIDE_PAD + 60 <= screenW
+            local fitsH = type(screenH) ~= "number" or screenH <= 0 or BASE_H * s * extra + 40 <= screenH
             if fitsW and fitsH then
                 break
             end
         end
     end
-    window:SetSize(math.floor(TableWidth() * scale + SIDE_PAD + 0.5), math.floor(BASE_H * scale + 0.5))
-    content:SetScale(scale)
+    window:SetSize(math.floor(FULL_W * scale + SIDE_PAD + 0.5), math.floor(BASE_H * scale * extra + 0.5))
+    content:SetScale(scale * extra)
 end
 ns.RefreshWindowSize = ApplyWindowSize
 
@@ -2436,7 +2440,7 @@ local function BuildWindow()
     end
     window = f
     local place = ns.db.window or {}
-    f:SetSize(TableWidth() * 1.15 + SIDE_PAD, BASE_H * 1.15) -- set properly once the content exists
+    f:SetSize(FULL_W * 1.15 + SIDE_PAD, BASE_H * 1.15) -- set properly once the content exists
     if place.point then
         f:SetPoint(place.point, UIParent, place.relPoint or place.point, tonumber(place.x) or 0, tonumber(place.y) or 0)
     else
