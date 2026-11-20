@@ -2700,13 +2700,15 @@ local function BuildMinimapButton()
     b.mark:Hide()
     b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:SetText("FriendsCraft", 1, 1, 1)
+        -- Same style as our other addons: gold title, white actions, grey extras.
+        GameTooltip:SetText("FriendsCraft", 1, 0.82, 0)
         local waiting = ns.PendingList and #ns.PendingList() or 0
         if waiting > 0 then
             GameTooltip:AddLine(waiting == 1 and "1 friend has FriendsCraft: choose whether to share."
                 or (waiting .. " friends have FriendsCraft: choose whether to share."), GOOD[1], GOOD[2], GOOD[3], true)
         end
-        GameTooltip:AddLine("Click to open. Drag to move.", INFO[1], INFO[2], INFO[3])
+        GameTooltip:AddLine("Left-click: Open or close", 1, 1, 1, true)
+        GameTooltip:AddLine("Drag: Move", 0.6, 0.6, 0.6, true)
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
