@@ -26,7 +26,8 @@ local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
 local TIP_RECIPES = 20
 
 local U -- ns.UI, set up when the guild window loads
-local panel, tab, list, search, offlineBox, footer
+local panel, tab, list, search, offlineBox, footer, foldAll
+local shownIds = {} -- profession ids on the page, for "Collapse all"
 local folded = {} -- [profession id] = true while folded (this session only)
 local refreshPending = false
 
@@ -360,10 +361,14 @@ local function MakeRow(parent)
     U.HeadingParts(row)
     row.hIcon = row:CreateTexture(nil, "ARTWORK")
     row.hIcon:SetSize(16, 16)
-    row.hIcon:SetPoint("BOTTOMLEFT", 6, 3)
+    row.hIcon:SetPoint("BOTTOMLEFT", 24, 3)
+    -- The game's own +/- fold button look; plain text where it's missing.
+    row.hFold = row:CreateTexture(nil, "ARTWORK")
+    row.hFold:SetSize(14, 14)
+    row.hFold:SetPoint("BOTTOMLEFT", 5, 4)
     row.hIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
     row.hText:ClearAllPoints()
-    row.hText:SetPoint("BOTTOMLEFT", 28, 4)
+    row.hText:SetPoint("BOTTOMLEFT", 46, 4)
 
     row.classIcon = row:CreateTexture(nil, "ARTWORK")
     row.classIcon:SetSize(16, 16)
@@ -401,6 +406,7 @@ local function FillRow(row, item)
     row.hRight:SetShown(heading)
     row.hLine:SetShown(heading)
     row.hIcon:SetShown(heading)
+    row.hFold:SetShown(heading)
     for _, part in ipairs({ row.classIcon, row.name, row.level, row.bar, row.none, row.where }) do
         part:SetShown(member)
     end
@@ -411,7 +417,13 @@ local function FillRow(row, item)
     if heading then
         local s = item.section
         row.hIcon:SetTexture(s.icon or 134400)
-        row.hText:SetText((item.folded and "+ " or "- ") .. s.name)
+        local fold = item.folded and "Interface\\Buttons\\UI-PlusButton-Up" or "Interface\\Buttons\\UI-MinusButton-Up"
+        if U.UseFile(row.hFold, fold) then
+            row.hText:SetText(s.name)
+        else
+            row.hFold:Hide()
+            row.hText:SetText((item.folded and "+ " or "- ") .. s.name)
+        end
         row.hRight:SetText(CountText(s))
         return
     end
@@ -484,6 +496,16 @@ local function Refresh()
         return
     end
     local sections, known, total, armory = Build()
+    shownIds = {}
+    local anyOpen = false
+    for _, s in ipairs(sections) do
+        shownIds[#shownIds + 1] = s.id
+        anyOpen = anyOpen or not folded[s.id]
+    end
+    if foldAll then
+        foldAll:SetText(anyOpen and "Collapse all" or "Expand all")
+        foldAll.collapse = anyOpen
+    end
     local q = search and strtrim(search:GetText() or ""):lower() or ""
     local items = {}
     for _, s in ipairs(sections) do
@@ -603,7 +625,10 @@ local function BuildPanel(cf)
     panel:Hide()
     panel:SetPoint("TOPLEFT", cf.CommunitiesList or cf, cf.CommunitiesList and "TOPRIGHT" or "TOPLEFT", 24, 0)
     panel:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -8, 26)
-    panel:SetFrameLevel(400) -- above the window's own pages, below its side tabs
+    -- Well above every page of the window: its chat page's member list and
+    -- input box sit high and showed through at 400. The side tabs are
+    -- outside the panel, so covering their level does no harm.
+    panel:SetFrameLevel(math.min((cf:GetFrameLevel() or 0) + 3000, 9000))
     panel:EnableMouse(true)
     local bg = panel:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
@@ -621,6 +646,22 @@ local function BuildPanel(cf)
             Refresh()
         end)
     offlineBox:SetPoint("LEFT", search, "RIGHT", 16, 0)
+
+    -- One button: "Collapse all" while any profession is open, else "Expand all".
+    local okBtn, b = pcall(CreateFrame, "Button", nil, panel, "UIPanelButtonTemplate")
+    if okBtn and b then
+        foldAll = b
+        foldAll:SetSize(100, 22)
+        foldAll:SetPoint("TOPRIGHT", -12, -8)
+        foldAll:SetText("Collapse all")
+        foldAll:SetScript("OnClick", function(self)
+            local collapse = self.collapse ~= false
+            for _, id in ipairs(shownIds) do
+                folded[id] = collapse or nil
+            end
+            Refresh()
+        end)
+    end
 
     local cols = CreateFrame("Frame", nil, panel)
     cols:SetPoint("TOPLEFT", 8, -36)
@@ -769,4 +810,4 @@ ns.On("GUILD_ROSTER_UPDATE", RefreshSoon)
 -- For the test rig.
 ns.GuildTab = { Build = Build, Refresh = Refresh, Show = ShowPanel, Hide = HidePanel,
     Panel = function() return panel end, Tab = function() return tab end, List = function() return list end,
-    Search = function() return search end }
+    Search = function() return search end, FoldAll = function() return foldAll end }
