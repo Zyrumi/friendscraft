@@ -2866,4 +2866,5 @@ ns.UI = {
     Ink = Ink, UseFile = UseFile, UseAtlas = UseAtlas, ClassColor = ClassColor, ClassName = ClassName,
     SetClassIcon = SetClassIcon, RowScripts = RowScripts, ScrollList = ScrollList, HeadingParts = HeadingParts,
     SearchInput = SearchInput, Toggle = Toggle, ProgressBar = ProgressBar,
+    IconRow = IconRow, FillIconRow = FillIconRow, QualityColor = QualityColor,
 }

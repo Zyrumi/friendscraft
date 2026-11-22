@@ -23,10 +23,10 @@ local SECONDARY = { [185] = true, [129] = true, [356] = true }
 local BLIZZ_TABS = { "ChatTab", "RosterTab", "GuildBenefitsTab", "GuildInfoTab", "GuildPreferredPlaySettingsTab" }
 local NAME_W, LEVEL_W, BAR_W = 190, 30, 140
 local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
-local TIP_RECIPES = 20
 
 local U -- ns.UI, set up when the guild window loads
 local panel, tab, list, search, offlineBox, footer, foldAll
+local recipeWin -- one member's recipes, opened by clicking them
 local shownIds = {} -- profession ids on the page, for "Collapse all"
 local folded = {} -- [profession id] = true while folded (this session only)
 local refreshPending = false
@@ -134,18 +134,22 @@ local function OwnData(key)
     local out = {}
     for _, e in ipairs(p.prof or {}) do
         if e.line and e.line > 0 then
-            local recipes = {}
+            local recipes, items = {}, {}
             for rid, item in pairs((p.recipes or {})[e.name] or {}) do
-                recipes[#recipes + 1] = ns.RecipeName(rid, item)
+                local name = ns.RecipeName(rid, item)
+                recipes[#recipes + 1] = name
+                items[name] = tonumber(item) ~= 0 and tonumber(item) or nil
             end
-            out[e.line] = { id = e.line, name = e.name, skill = e.rank, max = e.max, recipes = recipes, icon = e.icon }
+            out[e.line] = { id = e.line, name = e.name, skill = e.rank, max = e.max, recipes = recipes, items = items,
+                icon = e.icon }
         end
     end
     return out
 end
 
 -- Best of both sources per profession: the higher skill wins (skills only
--- go up), FriendsCraft on a tie; recipes are the union.
+-- go up), FriendsCraft on a tie; recipes are the union. recipes[name] is
+-- the crafted item's ID when FriendsCraft knows it, else true.
 local function Merge(key, armory)
     local merged = {}
     local function Add(e, source, seen)
@@ -164,9 +168,11 @@ local function Merge(key, armory)
             m.skill, m.max, m.source, m.seen = skill, tonumber(e.max), source, seen
         end
         for _, r in ipairs(e.recipes or {}) do
-            if type(r) == "string" and not m.recipes[r] then
-                m.recipes[r] = true
-                m.count = m.count + 1
+            if type(r) == "string" then
+                if not m.recipes[r] then
+                    m.count = m.count + 1
+                end
+                m.recipes[r] = (e.items and e.items[r]) or (type(m.recipes[r]) == "number" and m.recipes[r]) or true
             end
         end
     end
@@ -468,16 +474,9 @@ local function MemberTooltip(tt, s, m)
             tt:AddLine("From the armory" .. (ago and (", their last logout " .. ago) or ""),
                 U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
         end
-        local recipes = SortedRecipes(p)
-        if #recipes > 0 then
+        if p.count > 0 then
             tt:AddLine(" ")
-            tt:AddLine(Plural(#recipes, "recipe", "recipes"), U.GOLD[1], U.GOLD[2], U.GOLD[3])
-            for i = 1, math.min(#recipes, TIP_RECIPES) do
-                tt:AddLine(recipes[i], 1, 1, 1)
-            end
-            if #recipes > TIP_RECIPES then
-                tt:AddLine("+" .. (#recipes - TIP_RECIPES) .. " more", U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
-            end
+            tt:AddLine(Plural(p.count, "recipe", "recipes") .. ". Click to see them.", U.INFO[1], U.INFO[2], U.INFO[3])
         end
     else
         tt:AddLine("No skill info yet.", U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
@@ -537,7 +536,8 @@ local function Refresh()
             if not fold then
                 for _, m in ipairs(rows) do
                     items[#items + 1] = { kind = "member", member = m,
-                        tooltip = function(tt) MemberTooltip(tt, s, m) end }
+                        tooltip = function(tt) MemberTooltip(tt, s, m) end,
+                        onClick = function() ns.GuildTab.OpenRecipes(s, m) end }
                     local found = hits[m]
                     if found and #found > 0 then
                         local shown = {}
@@ -638,6 +638,9 @@ local function HidePanel()
         panel:Hide()
     end
     RestoreChatBar()
+    if recipeWin then
+        recipeWin:Hide()
+    end
     if tab then
         tab:SetChecked(false)
     end
@@ -839,7 +842,156 @@ end)
 ns.On("GUILD_TRADESKILL_UPDATE", RefreshSoon)
 ns.On("GUILD_ROSTER_UPDATE", RefreshSoon)
 
+-------------------------------------------------------------------------------
+-- One member's recipes (click a member). The game's own "view their recipes"
+-- is switched off on Forever, so this shows what FriendsCraft and the armory
+-- know instead, searchable.
+-------------------------------------------------------------------------------
+
+local function BuildRecipeWindow()
+    local ok, f = pcall(CreateFrame, "Frame", "FriendsCraftGuildRecipes", UIParent, "ButtonFrameTemplate")
+    local framed = ok and f
+    if not framed then
+        f = CreateFrame("Frame", "FriendsCraftGuildRecipes", UIParent, "BackdropTemplate")
+        if f.SetBackdrop then
+            f:SetBackdrop({
+                bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+                edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+                tile = true, tileSize = 32, edgeSize = 32,
+                insets = { left = 11, right = 12, top = 12, bottom = 11 },
+            })
+        end
+        local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT", -4, -4)
+        f.fcTitle = U.Ink(f, "GameFontNormal", "", U.GOLD)
+        f.fcTitle:SetPoint("TOP", 0, -16)
+    end
+    f.framed = framed
+    f:SetSize(340, 470)
+    f:SetFrameStrata("HIGH")
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:SetClampedToScreen(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:Hide()
+    tinsert(UISpecialFrames, "FriendsCraftGuildRecipes") -- Escape closes it
+    if framed and ButtonFrameTemplate_HideButtonBar then
+        pcall(ButtonFrameTemplate_HideButtonBar, f)
+    end
+
+    local c = CreateFrame("Frame", nil, f)
+    if framed and type(f.Inset) == "table" then
+        c:SetPoint("TOPLEFT", f.Inset, "TOPLEFT", 6, -6)
+        c:SetPoint("BOTTOMRIGHT", f.Inset, "BOTTOMRIGHT", -6, 6)
+    else
+        c:SetPoint("TOPLEFT", 16, -40)
+        c:SetPoint("BOTTOMRIGHT", -16, 16)
+    end
+    f.skill = U.ProgressBar(c)
+    f.skill:SetSize(180, 16)
+    f.skill:SetPoint("TOPLEFT", 4, -4)
+    f.skill:SetStatusBarColor(0.27, 0.55, 0.22)
+    f.source = U.Ink(c, "GameFontHighlightSmall", "", U.INK_DIM)
+    f.source:SetPoint("TOPLEFT", 4, -26)
+    f.source:SetPoint("RIGHT", -4, 0)
+    f.source:SetWordWrap(false)
+    f.search = U.SearchInput(c, 300, "Search their recipes")
+    f.search:SetPoint("TOPLEFT", 6, -44)
+    f.search:SetPoint("RIGHT", -4, 0)
+    f.search:HookScript("OnTextChanged", function() f:Fill() end)
+    f.list = U.ScrollList(c, U.ROW_H, U.IconRow, U.FillIconRow)
+    f.list.frame:SetPoint("TOPLEFT", 0, -72)
+    f.list.frame:SetPoint("BOTTOMRIGHT", 0, 18)
+    f.count = U.Ink(c, "GameFontHighlightSmall", "", U.INK_DIM)
+    f.count:SetPoint("BOTTOMLEFT", 4, 2)
+
+    function f:SetTitleText(text)
+        if self.SetTitle then
+            pcall(self.SetTitle, self, text)
+        elseif self.fcTitle then
+            self.fcTitle:SetText(text)
+        end
+    end
+
+    function f:Fill()
+        local s, m = self.section, self.member
+        if not s or not m then
+            return
+        end
+        local p = m.prof or {}
+        local q = strtrim(self.search:GetText() or ""):lower()
+        local items = {}
+        for _, name in ipairs(SortedRecipes(p)) do
+            if q == "" or name:lower():find(q, 1, true) then
+                local item = p.recipes[name]
+                local id = type(item) == "number" and item or nil
+                items[#items + 1] = {
+                    icon = id and ns.ItemIcon(id) or s.icon or 134400,
+                    text = name,
+                    color = id and U.QualityColor(id) or U.INK,
+                    tooltip = function(tt)
+                        if id and tt.SetItemByID then
+                            tt:SetItemByID(id)
+                        else
+                            tt:SetText(name, 1, 1, 1)
+                        end
+                    end,
+                }
+            end
+        end
+        if #items == 0 then
+            items[1] = { icon = s.icon or 134400, text = q ~= "" and "No recipe matches that." or "No recipes known yet.",
+                color = U.INK_DIM }
+        end
+        self.list:SetItems(items)
+        self.count:SetText(Plural(p.count or 0, "recipe", "recipes"))
+    end
+    return f
+end
+
+local function OpenRecipes(s, m)
+    if not U then
+        return
+    end
+    recipeWin = recipeWin or BuildRecipeWindow()
+    local f = recipeWin
+    f.section, f.member = s, m
+    f:SetTitleText(m.key .. ": " .. s.name)
+    if f.framed then
+        if f.SetPortraitToAsset then
+            pcall(f.SetPortraitToAsset, f, s.icon or 134400)
+        elseif type(f.portrait) == "table" and SetPortraitToTexture then
+            pcall(SetPortraitToTexture, f.portrait, s.icon or 134400)
+        end
+    end
+    local p = m.prof
+    if p and p.skill then
+        local max = (p.max and p.max > 0) and p.max or math.max(p.skill, 1)
+        f.skill:SetMinMaxValues(0, max)
+        f.skill:SetValue(math.min(p.skill, max))
+        f.skill.text:SetText(p.skill .. " / " .. max)
+        f.skill:Show()
+        local ago = p.source ~= "fc" and Ago(p.seen)
+        f.source:SetText(p.source == "fc" and "From FriendsCraft" or ("From the armory" .. (ago and (", their last logout " .. ago) or "")))
+    else
+        f.skill:Hide()
+        f.source:SetText("No skill info yet")
+    end
+    f.search:SetText("")
+    if not f.placed and CommunitiesFrame then
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", CommunitiesFrame, "TOPRIGHT", 44, 0) -- clear of the side tabs
+        f.placed = true
+    end
+    f:Show()
+    f:Fill()
+end
+
 -- For the test rig.
 ns.GuildTab = { Build = Build, Refresh = Refresh, Show = ShowPanel, Hide = HidePanel,
     Panel = function() return panel end, Tab = function() return tab end, List = function() return list end,
-    Search = function() return search end, FoldAll = function() return foldAll end }
+    Search = function() return search end, FoldAll = function() return foldAll end,
+    OpenRecipes = OpenRecipes, RecipeWindow = function() return recipeWin end }
