@@ -2858,3 +2858,12 @@ function ns.UpdateMinimapButton()
 end
 
 ns.On("FC_READY", function() ns.UpdateMinimapButton() end)
+
+-- Building blocks other files reuse (GuildTab.lua), so the guild window's
+-- Professions tab looks and behaves like the rest of FriendsCraft.
+ns.UI = {
+    ROW_H = ROW_H, INK = INK, INK_DIM = INK_DIM, GOLD = GOLD, GOOD = GOOD, INFO = INFO,
+    Ink = Ink, UseFile = UseFile, UseAtlas = UseAtlas, ClassColor = ClassColor, ClassName = ClassName,
+    SetClassIcon = SetClassIcon, RowScripts = RowScripts, ScrollList = ScrollList, HeadingParts = HeadingParts,
+    SearchInput = SearchInput, Toggle = Toggle, ProgressBar = ProgressBar,
+}

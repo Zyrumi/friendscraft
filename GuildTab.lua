@@ -1,0 +1,772 @@
+-- FriendsCraft: Professions tab in the guild window
+--
+-- Adds a tab under the game's own guild tabs (Roster, Info, ...) listing
+-- every guild member by profession. Three sources, combined per member:
+--   1. FriendsCraft's own data (you, your alts, friends and guild members
+--      who run FriendsCraft): exact skill and recipes, usually the freshest.
+--   2. FriendsCraftGuildData, from the optional FriendsCraft_Guild addon:
+--      skill and recipes from Blizzard's armory for everyone it has.
+--   3. The game's own guild profession list (GetGuildTradeSkillInfo): who
+--      has which profession, for every member. Its skill number is always 1
+--      on Forever, so it is never shown.
+-- The tab is our own button and panel on top of the guild window. It never
+-- changes the window's display mode, so the game's own tabs keep working.
+
+local _, ns = ...
+
+local TEST_PROFESSION = 2933 -- "Test Profession [DNT]", sent by the server
+local CLASS_BY_ID = { [1] = "WARRIOR", [2] = "PALADIN", [3] = "HUNTER", [4] = "ROGUE", [5] = "PRIEST",
+    [6] = "DEATHKNIGHT", [7] = "SHAMAN", [8] = "MAGE", [9] = "WARLOCK", [10] = "MONK", [11] = "DRUID",
+    [12] = "DEMONHUNTER", [13] = "EVOKER" }
+local GATHERING = { [182] = true, [186] = true, [393] = true }
+local SECONDARY = { [185] = true, [129] = true, [356] = true }
+local BLIZZ_TABS = { "ChatTab", "RosterTab", "GuildBenefitsTab", "GuildInfoTab", "GuildPreferredPlaySettingsTab" }
+local NAME_W, LEVEL_W, BAR_W = 190, 30, 140
+local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
+local TIP_RECIPES = 20
+
+local U -- ns.UI, set up when the guild window loads
+local panel, tab, list, search, offlineBox, footer
+local folded = {} -- [profession id] = true while folded (this session only)
+local refreshPending = false
+
+-------------------------------------------------------------------------------
+-- Data
+-------------------------------------------------------------------------------
+
+local function Plain(v)
+    if v == nil or ns.IsSecret(v) then
+        return nil
+    end
+    return v
+end
+
+local function Key(name)
+    name = Plain(name)
+    if type(name) ~= "string" or name == "" then
+        return nil
+    end
+    return ns.FullName(name) or name
+end
+
+-- The armory file, if it belongs to the guild you're in.
+local function Armory()
+    local d = FriendsCraftGuildData
+    if type(d) ~= "table" or type(d.members) ~= "table" or type(d.guild) ~= "string" then
+        return nil
+    end
+    local g = ns.GuildName()
+    if not g or d.guild:lower() ~= g:lower() then
+        return nil
+    end
+    return d
+end
+
+-- [key] = { level, zone, online, class, away = { years, months, days, hours } }
+local function Roster()
+    local out = {}
+    if not GetNumGuildMembers or not GetGuildRosterInfo then
+        return out
+    end
+    local total = tonumber(Plain((GetNumGuildMembers()))) or 0
+    for i = 1, total do
+        local name, _, _, level, _, zone, _, _, online, _, class = GetGuildRosterInfo(i)
+        local key = Key(name)
+        if key then
+            local e = { level = tonumber(Plain(level)), zone = Plain(zone), online = Plain(online) and true or false,
+                class = Plain(class) }
+            if not e.online and GetGuildRosterLastOnline then
+                local ok, y, mo, d, h = pcall(GetGuildRosterLastOnline, i)
+                if ok then
+                    e.away = { tonumber(Plain(y)) or 0, tonumber(Plain(mo)) or 0, tonumber(Plain(d)) or 0,
+                        tonumber(Plain(h)) or 0 }
+                end
+            end
+            out[key] = e
+        end
+    end
+    return out
+end
+
+-- The game's own list: { { id, name, icon, members = { [key] = { class, online, zone } } } }
+local function Native()
+    local profs = {}
+    if not GetNumGuildTradeSkill or not GetGuildTradeSkillInfo then
+        return profs
+    end
+    -- Headings come folded; members are only listed under open ones.
+    if ExpandGuildTradeSkillHeader then
+        for i = (tonumber(GetNumGuildTradeSkill()) or 0), 1, -1 do
+            local id, collapsed, _, header = GetGuildTradeSkillInfo(i)
+            if Plain(header) and Plain(collapsed) and Plain(id) then
+                pcall(ExpandGuildTradeSkillHeader, id)
+            end
+        end
+    end
+    local current
+    for i = 1, (tonumber(GetNumGuildTradeSkill()) or 0) do
+        local id, _, icon, header, _, _, _, name, _, _, online, zone, _, classFile = GetGuildTradeSkillInfo(i)
+        id, header = tonumber(Plain(id)), Plain(header)
+        if header then
+            current = nil
+            if id and id ~= TEST_PROFESSION and not tostring(header):find("[DNT]", 1, true) then
+                current = { id = id, name = tostring(header), icon = Plain(icon), members = {} }
+                profs[#profs + 1] = current
+            end
+        elseif current then
+            local key = Key(name)
+            if key then
+                current.members[key] = { class = Plain(classFile), online = Plain(online) and true or false,
+                    zone = Plain(zone) }
+            end
+        end
+    end
+    return profs
+end
+
+-- FriendsCraft's own data for one character: { [line] = { id, name, skill, max, recipes = { names } } }
+local function OwnData(key)
+    local p = ns.db and ns.db.people[key]
+    if not p or ns.IsHidden(key) then
+        return nil
+    end
+    local out = {}
+    for _, e in ipairs(p.prof or {}) do
+        if e.line and e.line > 0 then
+            local recipes = {}
+            for rid, item in pairs((p.recipes or {})[e.name] or {}) do
+                recipes[#recipes + 1] = ns.RecipeName(rid, item)
+            end
+            out[e.line] = { id = e.line, name = e.name, skill = e.rank, max = e.max, recipes = recipes, icon = e.icon }
+        end
+    end
+    return out
+end
+
+-- Best of both sources per profession: the higher skill wins (skills only
+-- go up), FriendsCraft on a tie; recipes are the union.
+local function Merge(key, armory)
+    local merged = {}
+    local function Add(e, source, seen)
+        local id = type(e) == "table" and tonumber(e.id)
+        if not id then
+            return
+        end
+        local m = merged[id]
+        if not m then
+            m = { id = id, name = e.name, recipes = {}, count = 0 }
+            merged[id] = m
+        end
+        m.icon = m.icon or e.icon
+        local skill = tonumber(e.skill)
+        if skill and skill >= (m.skill or -1) then
+            m.skill, m.max, m.source, m.seen = skill, tonumber(e.max), source, seen
+        end
+        for _, r in ipairs(e.recipes or {}) do
+            if type(r) == "string" and not m.recipes[r] then
+                m.recipes[r] = true
+                m.count = m.count + 1
+            end
+        end
+    end
+    local a = armory and armory.members[key]
+    if type(a) == "table" then
+        for _, e in ipairs(a.profs or {}) do
+            Add(e, "armory", tonumber(a.seen))
+        end
+    end
+    for _, e in pairs(OwnData(key) or {}) do
+        Add(e, "fc")
+    end
+    return merged, type(a) == "table" and a or nil
+end
+
+local function SectionOrder(s)
+    if SECONDARY[s.id] then
+        return 3
+    elseif GATHERING[s.id] then
+        return 2
+    end
+    return 1
+end
+
+-- Everything the tab shows: sections (one per profession) with their rows.
+local function Build()
+    local armory = Armory()
+    local roster = Roster()
+    local rosterKnown = next(roster) ~= nil
+    local showOffline = ns.db.guildOffline ~= false
+    local sections, byId = {}, {}
+    local function Section(id, name, icon)
+        local s = byId[id]
+        if not s then
+            s = { id = id, name = name or ("Profession " .. id), icon = icon, members = {} }
+            byId[id] = s
+            sections[#sections + 1] = s
+        end
+        s.icon = s.icon or icon
+        return s
+    end
+
+    local people = {}
+    for _, p in ipairs(Native()) do
+        local s = Section(p.id, p.name, p.icon)
+        for key, m in pairs(p.members) do
+            s.members[key] = { key = key, class = m.class, online = m.online, zone = m.zone }
+            people[key] = true
+        end
+    end
+    for key in pairs(roster) do
+        people[key] = true
+    end
+    if armory then
+        for key in pairs(armory.members) do
+            if type(key) == "string" and (not rosterKnown or roster[key]) then
+                people[key] = true
+            end
+        end
+    end
+
+    local total, known = 0, 0
+    for key in pairs(people) do
+        total = total + 1
+        local merged, a = Merge(key, armory)
+        local any = false
+        for id, e in pairs(merged) do
+            if e.skill then
+                any = true
+            end
+            local s = Section(id, e.name, e.icon)
+            local m = s.members[key]
+            if not m then
+                m = { key = key }
+                s.members[key] = m
+            end
+            m.prof = e
+            m.armory = a
+        end
+        if any then
+            known = known + 1
+        end
+    end
+
+    for _, s in ipairs(sections) do
+        local rows, online = {}, 0
+        for key, m in pairs(s.members) do
+            local r = roster[key]
+            if r then
+                m.online, m.zone, m.away = r.online, r.zone, r.away
+                m.level = r.level
+                m.class = m.class or r.class
+            end
+            if m.armory then
+                m.level = m.level or tonumber(m.armory.level)
+                m.class = m.class or CLASS_BY_ID[tonumber(m.armory.class) or 0]
+            end
+            if m.online then
+                online = online + 1
+            end
+            if showOffline or m.online then
+                rows[#rows + 1] = m
+            end
+        end
+        table.sort(rows, function(x, y)
+            local sx, sy = x.prof and x.prof.skill or -1, y.prof and y.prof.skill or -1
+            if sx ~= sy then
+                return sx > sy
+            end
+            return x.key < y.key
+        end)
+        s.rows, s.online = rows, online
+        s.count = 0
+        for _ in pairs(s.members) do
+            s.count = s.count + 1
+        end
+        s.icon = s.icon or ns.ProfIcon({ line = s.id })
+    end
+    table.sort(sections, function(x, y)
+        local ox, oy = SectionOrder(x), SectionOrder(y)
+        if ox ~= oy then
+            return ox < oy
+        end
+        return x.name < y.name
+    end)
+    return sections, known, total, armory
+end
+
+-------------------------------------------------------------------------------
+-- Text helpers
+-------------------------------------------------------------------------------
+
+local function Plural(n, one, many)
+    return n .. " " .. (n == 1 and one or many)
+end
+
+local function Ago(ts)
+    ts = tonumber(ts)
+    local now = time and time() or nil
+    if not ts or not now then
+        return nil
+    end
+    local s = math.max(0, now - ts)
+    if s < 3600 then
+        return Plural(math.max(1, math.floor(s / 60)), "minute", "minutes") .. " ago"
+    elseif s < 86400 * 2 then
+        return Plural(math.floor(s / 3600), "hour", "hours") .. " ago"
+    end
+    return Plural(math.floor(s / 86400), "day", "days") .. " ago"
+end
+
+local function AwayText(away)
+    if not away then
+        return "Offline"
+    end
+    local y, mo, d, h = away[1], away[2], away[3], away[4]
+    if y > 0 then
+        return "Offline over a year"
+    elseif mo > 0 then
+        return "Offline " .. Plural(mo, "month", "months")
+    elseif d > 0 then
+        return "Offline " .. Plural(d, "day", "days")
+    elseif h > 0 then
+        return "Offline " .. Plural(h, "hour", "hours")
+    end
+    return "Offline"
+end
+
+local function CountText(s)
+    if s.count == 0 then
+        return "nobody yet"
+    end
+    return Plural(s.count, "member", "members") .. ", " .. (s.online > 0 and (s.online .. " online") or "nobody online")
+end
+
+local function SortedRecipes(prof)
+    local out = {}
+    for r in pairs(prof and prof.recipes or {}) do
+        out[#out + 1] = r
+    end
+    table.sort(out)
+    return out
+end
+
+-------------------------------------------------------------------------------
+-- Rows
+-------------------------------------------------------------------------------
+
+local function MakeRow(parent)
+    local row = CreateFrame("Button", nil, parent)
+    U.RowScripts(row)
+    U.HeadingParts(row)
+    row.hIcon = row:CreateTexture(nil, "ARTWORK")
+    row.hIcon:SetSize(16, 16)
+    row.hIcon:SetPoint("BOTTOMLEFT", 6, 3)
+    row.hIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    row.hText:ClearAllPoints()
+    row.hText:SetPoint("BOTTOMLEFT", 28, 4)
+
+    row.classIcon = row:CreateTexture(nil, "ARTWORK")
+    row.classIcon:SetSize(16, 16)
+    row.classIcon:SetPoint("LEFT", 8, 0)
+    row.name = U.Ink(row, "GameFontHighlight")
+    row.name:SetPoint("LEFT", 30, 0)
+    row.name:SetWidth(NAME_W)
+    row.name:SetWordWrap(false)
+    row.level = U.Ink(row, "GameFontHighlightSmall")
+    row.level:SetPoint("LEFT", 30 + NAME_W, 0)
+    row.level:SetWidth(LEVEL_W)
+    row.level:SetJustifyH("RIGHT")
+    row.bar = U.ProgressBar(row)
+    row.bar:SetSize(BAR_W, 14)
+    row.bar:SetPoint("LEFT", 30 + NAME_W + LEVEL_W + 12, 0)
+    row.bar:SetStatusBarColor(0.27, 0.55, 0.22)
+    row.none = U.Ink(row, "GameFontHighlightSmall", "no skill info", U.INK_DIM)
+    row.none:SetPoint("LEFT", row.bar, "LEFT", 4, 0)
+    row.where = U.Ink(row, "GameFontHighlightSmall", "", U.INK_DIM)
+    row.where:SetPoint("LEFT", row.bar, "RIGHT", 12, 0)
+    row.where:SetPoint("RIGHT", -6, 0)
+    row.where:SetWordWrap(false)
+
+    row.sub = U.Ink(row, "GameFontHighlightSmall", "", U.INK_DIM)
+    row.sub:SetPoint("LEFT", 30, 0)
+    row.sub:SetPoint("RIGHT", -6, 0)
+    row.sub:SetWordWrap(false)
+    return row
+end
+
+local function FillRow(row, item)
+    local kind = item.kind
+    local heading, member, sub = kind == "heading", kind == "member", kind == "sub"
+    row.hText:SetShown(heading)
+    row.hRight:SetShown(heading)
+    row.hLine:SetShown(heading)
+    row.hIcon:SetShown(heading)
+    for _, part in ipairs({ row.classIcon, row.name, row.level, row.bar, row.none, row.where }) do
+        part:SetShown(member)
+    end
+    row.sub:SetShown(sub)
+    if row.stripe then
+        row.stripe:SetAlpha(member and 1 or 0)
+    end
+    if heading then
+        local s = item.section
+        row.hIcon:SetTexture(s.icon or 134400)
+        row.hText:SetText((item.folded and "+ " or "- ") .. s.name)
+        row.hRight:SetText(CountText(s))
+        return
+    end
+    if sub then
+        row.sub:SetText(item.text or "")
+        return
+    end
+    local m = item.member
+    U.SetClassIcon(row.classIcon, m.class)
+    row.name:SetText(m.key)
+    if m.online then
+        local r, g, b = U.ClassColor(m.class)
+        row.name:SetTextColor(r, g, b)
+    else
+        row.name:SetTextColor(U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
+    end
+    row.level:SetText(m.level and tostring(m.level) or "")
+    local p = m.prof
+    if p and p.skill then
+        local max = (p.max and p.max > 0) and p.max or math.max(p.skill, 1)
+        row.bar:SetMinMaxValues(0, max)
+        row.bar:SetValue(math.min(p.skill, max))
+        row.bar.text:SetText(p.skill .. " / " .. max)
+        row.none:Hide()
+    else
+        row.bar:Hide()
+        row.none:Show()
+    end
+    row.where:SetText(m.online and (m.zone or "") or AwayText(m.away))
+end
+
+local function MemberTooltip(tt, s, m)
+    local r, g, b = U.ClassColor(m.class)
+    tt:SetText(m.key, r, g, b)
+    local p = m.prof
+    if p and p.skill then
+        tt:AddLine(s.name .. ": " .. p.skill .. (p.max and (" / " .. p.max) or ""), 1, 1, 1)
+        if p.source == "fc" then
+            tt:AddLine("From FriendsCraft", U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
+        else
+            local ago = Ago(p.seen)
+            tt:AddLine("From the armory" .. (ago and (", their last logout " .. ago) or ""),
+                U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
+        end
+        local recipes = SortedRecipes(p)
+        if #recipes > 0 then
+            tt:AddLine(" ")
+            tt:AddLine(Plural(#recipes, "recipe", "recipes"), U.GOLD[1], U.GOLD[2], U.GOLD[3])
+            for i = 1, math.min(#recipes, TIP_RECIPES) do
+                tt:AddLine(recipes[i], 1, 1, 1)
+            end
+            if #recipes > TIP_RECIPES then
+                tt:AddLine("+" .. (#recipes - TIP_RECIPES) .. " more", U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
+            end
+        end
+    else
+        tt:AddLine("No skill info yet.", U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
+        local how = Armory() and "It shows once they run FriendsCraft, or once the armory has them (level 10 and a logout)."
+            or "It shows once they run FriendsCraft."
+        tt:AddLine(how, 1, 1, 1, true)
+    end
+end
+
+-------------------------------------------------------------------------------
+-- The panel
+-------------------------------------------------------------------------------
+
+local function Refresh()
+    if not panel or not panel:IsShown() then
+        return
+    end
+    local sections, known, total, armory = Build()
+    local q = search and strtrim(search:GetText() or ""):lower() or ""
+    local items = {}
+    for _, s in ipairs(sections) do
+        local rows, hits = s.rows, {}
+        if q ~= "" and not s.name:lower():find(q, 1, true) then
+            rows = {}
+            for _, m in ipairs(s.rows) do
+                local found = {}
+                for _, r in ipairs(SortedRecipes(m.prof)) do
+                    if r:lower():find(q, 1, true) then
+                        found[#found + 1] = r
+                    end
+                end
+                if #found > 0 or m.key:lower():find(q, 1, true) then
+                    rows[#rows + 1] = m
+                    hits[m] = found
+                end
+            end
+        end
+        if q == "" or #rows > 0 then
+            local fold = q == "" and folded[s.id]
+            items[#items + 1] = {
+                kind = "heading", section = s, folded = fold,
+                onClick = function()
+                    folded[s.id] = not folded[s.id]
+                    Refresh()
+                end,
+            }
+            if not fold then
+                for _, m in ipairs(rows) do
+                    items[#items + 1] = { kind = "member", member = m,
+                        tooltip = function(tt) MemberTooltip(tt, s, m) end }
+                    local found = hits[m]
+                    if found and #found > 0 then
+                        local shown = {}
+                        for i = 1, math.min(#found, CAN_MAKE_SHOWN) do
+                            shown[i] = found[i]
+                        end
+                        local more = #found > CAN_MAKE_SHOWN and (" +" .. (#found - CAN_MAKE_SHOWN) .. " more") or ""
+                        items[#items + 1] = { kind = "sub", text = "Can make: " .. table.concat(shown, ", ") .. more }
+                    end
+                end
+            end
+        end
+    end
+    if #items == 0 then
+        items[1] = { kind = "sub", text = q ~= "" and "Nobody in the guild matches that." or
+            "The game hasn't sent the guild's professions yet." }
+    end
+    list:SetItems(items)
+    local text = "Skill and recipes for " .. known .. " of " .. Plural(total, "member", "members") .. "."
+    if armory then
+        local ago = Ago(armory.fetched)
+        text = text .. " Armory data from " .. (ago or "earlier") .. "."
+    end
+    footer:SetText(text)
+    offlineBox.SyncFilter()
+end
+
+local function RefreshSoon()
+    if refreshPending or not panel or not panel:IsShown() then
+        return
+    end
+    refreshPending = true
+    C_Timer.After(0.2, ns.Safe(function()
+        refreshPending = false
+        Refresh()
+    end, "guild professions"))
+end
+
+-- Ask the server for fresh lists; GUILD_TRADESKILL_UPDATE and
+-- GUILD_ROSTER_UPDATE redraw when they arrive.
+local function Query()
+    -- The game's profession list leaves offline members out unless asked
+    -- (this is the old guild window's setting, not the roster's tick box).
+    if SetGuildRosterShowOffline then
+        pcall(SetGuildRosterShowOffline, ns.db.guildOffline ~= false)
+    end
+    if C_GuildInfo and C_GuildInfo.GuildRoster then
+        pcall(C_GuildInfo.GuildRoster)
+    elseif GuildRoster then
+        pcall(GuildRoster)
+    end
+    if QueryGuildRecipes then
+        pcall(QueryGuildRecipes)
+    end
+end
+
+local function SetBlizzardTabsChecked(cf, checked)
+    for _, n in ipairs(BLIZZ_TABS) do
+        local t = cf[n]
+        if t and t.SetChecked then
+            t:SetChecked(checked)
+        end
+    end
+end
+
+local function HidePanel()
+    if panel and panel:IsShown() then
+        panel:Hide()
+    end
+    if tab then
+        tab:SetChecked(false)
+    end
+end
+
+local function ShowPanel()
+    panel:Show()
+    SetBlizzardTabsChecked(CommunitiesFrame, false)
+    tab:SetChecked(true)
+    Query()
+    Refresh()
+end
+
+local function BuildPanel(cf)
+    panel = CreateFrame("Frame", nil, cf)
+    panel:Hide()
+    panel:SetPoint("TOPLEFT", cf.CommunitiesList or cf, cf.CommunitiesList and "TOPRIGHT" or "TOPLEFT", 24, 0)
+    panel:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -8, 26)
+    panel:SetFrameLevel(400) -- above the window's own pages, below its side tabs
+    panel:EnableMouse(true)
+    local bg = panel:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0.04, 0.04, 0.05, 1)
+
+    search = U.SearchInput(panel, 260, "Search recipe, profession or member")
+    search:SetPoint("TOPLEFT", 12, -8)
+    search:HookScript("OnTextChanged", function() Refresh() end)
+
+    offlineBox = U.Toggle(panel, "Show offline members",
+        function() return ns.db.guildOffline ~= false end,
+        function(on)
+            ns.db.guildOffline = on
+            Query()
+            Refresh()
+        end)
+    offlineBox:SetPoint("LEFT", search, "RIGHT", 16, 0)
+
+    local cols = CreateFrame("Frame", nil, panel)
+    cols:SetPoint("TOPLEFT", 8, -36)
+    cols:SetPoint("TOPRIGHT", -8, -36)
+    cols:SetHeight(18)
+    local function Col(text, x)
+        local fs = U.Ink(cols, "GameFontNormalSmall", text, U.GOLD)
+        fs:SetPoint("LEFT", x, 0)
+        return fs
+    end
+    Col("Name", 30)
+    local lvl = Col("Lvl", 30 + NAME_W)
+    lvl:SetWidth(LEVEL_W)
+    lvl:SetJustifyH("RIGHT")
+    Col("Skill", 30 + NAME_W + LEVEL_W + 12)
+    Col("Zone", 30 + NAME_W + LEVEL_W + 12 + BAR_W + 12)
+    local line = cols:CreateTexture(nil, "ARTWORK")
+    line:SetHeight(1)
+    line:SetPoint("BOTTOMLEFT", 0, 0)
+    line:SetPoint("BOTTOMRIGHT", 0, 0)
+    line:SetColorTexture(U.GOLD[1], U.GOLD[2], U.GOLD[3], 0.35)
+
+    list = U.ScrollList(panel, U.ROW_H, MakeRow, FillRow)
+    list.frame:SetPoint("TOPLEFT", 8, -58)
+    list.frame:SetPoint("BOTTOMRIGHT", -6, 24)
+
+    footer = U.Ink(panel, "GameFontHighlightSmall", "", U.INK_DIM)
+    footer:SetPoint("BOTTOMLEFT", 12, 6)
+    footer:SetPoint("BOTTOMRIGHT", -12, 6)
+    footer:SetWordWrap(false)
+
+    panel:SetScript("OnShow", function() list:SetItems(list.items) end)
+end
+
+local function MakeTab(cf)
+    local ok, b = pcall(CreateFrame, "CheckButton", nil, cf, "CommunitiesFrameTabTemplate")
+    if not ok or not b then
+        -- Plain stand-in where the game's side tab look is missing.
+        b = CreateFrame("CheckButton", nil, cf)
+        b:SetSize(32, 32)
+        local bg = b:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetColorTexture(0, 0, 0, 0.7)
+        b:SetCheckedTexture("Interface\\Buttons\\CheckButtonHilight")
+        b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+        b:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self.tooltip, 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+    b.tooltip = "Professions"
+    local icon = rawget(b, "Icon") or rawget(b, "icon")
+    if type(icon) ~= "table" then
+        icon = b:CreateTexture(nil, "ARTWORK")
+        icon:SetPoint("TOPLEFT", 2, -2)
+        icon:SetPoint("BOTTOMRIGHT", -2, 2)
+    end
+    if not U.UseFile(icon, "Interface\\Icons\\Trade_BlackSmithing") then
+        icon:SetTexture(134400)
+    end
+    icon:Show()
+    b:SetScript("OnClick", function()
+        if PlaySound and SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_TAB then
+            pcall(PlaySound, SOUNDKIT.IG_CHARACTER_INFO_TAB)
+        end
+        ShowPanel()
+    end)
+    b:Hide()
+    return b
+end
+
+-- After the game lays out its tabs: ours goes under the last guild tab, and
+-- only while a guild is selected.
+local function PlaceTab(cf)
+    if not tab then
+        return
+    end
+    local guild = cf.GuildInfoTab and cf.GuildInfoTab:IsShown()
+    if not guild then
+        tab:Hide()
+        HidePanel()
+        return
+    end
+    local last
+    for i = #BLIZZ_TABS, 2, -1 do
+        local t = cf[BLIZZ_TABS[i]]
+        if t and t:IsShown() then
+            last = t
+            break
+        end
+    end
+    tab:ClearAllPoints()
+    tab:SetPoint("TOPLEFT", last, "BOTTOMLEFT", 0, -20)
+    tab:Show()
+    if panel:IsShown() then
+        SetBlizzardTabsChecked(cf, false)
+        tab:SetChecked(true)
+    else
+        tab:SetChecked(false)
+    end
+end
+
+local function Setup()
+    local cf = CommunitiesFrame
+    if tab or not cf or not ns.UI then
+        return
+    end
+    U = ns.UI
+    BuildPanel(cf)
+    tab = MakeTab(cf)
+    for _, n in ipairs(BLIZZ_TABS) do
+        local t = cf[n]
+        if t and t.HookScript then
+            t:HookScript("OnClick", HidePanel)
+        end
+    end
+    if type(cf.UpdateCommunitiesTabs) == "function" then
+        hooksecurefunc(cf, "UpdateCommunitiesTabs", ns.Safe(function() PlaceTab(cf) end, "guild tabs"))
+    end
+    cf:HookScript("OnHide", HidePanel)
+    PlaceTab(cf)
+end
+
+local function CommunitiesLoaded()
+    if C_AddOns and C_AddOns.IsAddOnLoaded then
+        return C_AddOns.IsAddOnLoaded("Blizzard_Communities")
+    end
+    return IsAddOnLoaded and IsAddOnLoaded("Blizzard_Communities")
+end
+
+ns.On("ADDON_LOADED", function(name)
+    if name == "Blizzard_Communities" then
+        Setup()
+    end
+end)
+ns.On("FC_READY", function()
+    if CommunitiesLoaded() then
+        Setup()
+    end
+end)
+ns.On("GUILD_TRADESKILL_UPDATE", RefreshSoon)
+ns.On("GUILD_ROSTER_UPDATE", RefreshSoon)
+
+-- For the test rig.
+ns.GuildTab = { Build = Build, Refresh = Refresh, Show = ShowPanel, Hide = HidePanel,
+    Panel = function() return panel end, Tab = function() return tab end, List = function() return list end,
+    Search = function() return search end }

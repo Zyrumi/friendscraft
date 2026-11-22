@@ -27,6 +27,7 @@ local DEFAULTS = {
     consentReady = false, -- friends from before opt-in were marked "yes" once
     consentBnet = false,  -- answers were copied to the Battle.net friend they belong to once
     guildShare = true, -- share professions, skills and recipes with your guild
+    guildOffline = true, -- Professions tab in the guild window lists offline members too
 }
 
 -------------------------------------------------------------------------------
