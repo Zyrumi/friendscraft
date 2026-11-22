@@ -714,6 +714,30 @@ function ns.IsSecondary(e)
     return SecondaryIndex(e) ~= nil
 end
 
+-- Gathering professions (Herbalism, Mining, Skinning) come after the
+-- crafting ones: what people look for is who can make things.
+local GATHERING = { [182] = true, [186] = true, [393] = true,
+    Herbalism = true, Mining = true, Skinning = true }
+function ns.IsGathering(e)
+    return GATHERING[e.line] or GATHERING[e.name] or false
+end
+
+-- Crafting first, then gathering; otherwise keeps the order it was given.
+local function CraftingFirst(list)
+    local craft, gather = {}, {}
+    for _, e in ipairs(list) do
+        if ns.IsGathering(e) then
+            gather[#gather + 1] = e
+        else
+            craft[#craft + 1] = e
+        end
+    end
+    for _, e in ipairs(gather) do
+        craft[#craft + 1] = e
+    end
+    return craft
+end
+
 local function FillSlot(s, e, item, text)
     s.entry, s.person, s.key = e or false, item.person or false, item.key
     s.holders = item.holders and e and item.holders[e.name] or false
@@ -791,6 +815,7 @@ local function FillCrewRow(row, item)
             primary[#primary + 1] = e
         end
     end
+    primary = CraftingFirst(primary)
     local showSec = ns.ShowSecondary()
     for i, s in ipairs(row.sec) do
         FillSlot(s, showSec and sec[i] or nil, item)
@@ -992,6 +1017,8 @@ local function BestProfs(keys)
         list[#list + 1] = e
     end
     table.sort(list, function(a, b)
+        local ga, gb = ns.IsGathering(a), ns.IsGathering(b)
+        if ga ~= gb then return gb end -- crafting before gathering
         if a.rank ~= b.rank then return a.rank > b.rank end
         return a.name < b.name
     end)
