@@ -672,6 +672,10 @@ end
 
 -- A friend's other characters. Only taken for names that are not yours and
 -- not friends you hear from directly, and only from the same friend.
+-- Exception: a character last heard from directly on a FriendsCraft before
+-- 0.3.0 (no account tag, not online now) can't say which friend it belongs
+-- to, so the friend who lists it as theirs takes it over. If that was wrong,
+-- the character's own hello puts it right the next time it is online.
 function Handlers.AL(name, payload)
     local tag = ns.db.people[name] and ns.db.people[name].tag
     local want = {}
@@ -681,9 +685,16 @@ function Handlers.AL(name, payload)
         local q = alt and ns.db.people[alt]
         local mineOrMe = alt == ns.me or (q and q.mine)
         local direct = q and not q.via and ns.db.crew[alt]
+        local legacy = direct and tag and q.tag == nil and not ns.online[alt]
         local otherFriend = q and q.via and q.via ~= name and not (tag and q.tag == tag)
-        if alt and alt ~= name and not mineOrMe and not direct and not otherFriend then
+        if alt and alt ~= name and not mineOrMe and (legacy or not direct) and not otherFriend then
             q = ns.Person(alt, true)
+            if legacy then
+                -- From now on it comes through its friend, like any alt.
+                ns.db.crew[alt] = nil
+                missingSince[alt] = nil
+                routes[alt] = nil
+            end
             if q.via ~= name or q.tag ~= tag then
                 q.via, q.tag = name, tag
                 ns.Changed()
