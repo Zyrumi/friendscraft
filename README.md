@@ -37,7 +37,9 @@ Guildmates with FriendsCraft show up in their own section on the Crew page, in t
 
 ## Hiding people
 
-On the Crew page, right-click a friend's line and confirm to hide that friend with all their characters, or right-click a single character to hide just that one. Hidden people are left out of the list and the item tooltips, and they stop getting your data (what they already got stays with them). When you show them again, they catch up. Click "Show hidden" to see them again, then right-click to bring them back.
+A friend's line is named after whichever of their characters is online or was seen last. To give them a fixed name, right-click their line and pick Name this friend. Only you see that name, and leaving it empty goes back to the automatic one.
+
+On the Crew page, right-click a friend's line and pick Hide to hide that friend with all their characters, or right-click a single character to hide just that one. Hidden people are left out of the list and the item tooltips, and they stop getting your data (what they already got stays with them). When you show them again, they catch up. Click "Show hidden" to see them again, then right-click to bring them back.
 
 ## Good to know
 

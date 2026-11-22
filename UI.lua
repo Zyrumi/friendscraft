@@ -885,6 +885,95 @@ local function AskToHide(key, label)
     StaticPopup_Show("FRIENDSCRAFT_HIDE", text, nil, key)
 end
 
+-- Asks what to call a friend. Empty = back to their character's name.
+local function PopupBox(dialog)
+    if not dialog then
+        return nil
+    end
+    if dialog.GetEditBox then
+        local ok, box = pcall(dialog.GetEditBox, dialog)
+        if ok and box then
+            return box
+        end
+    end
+    return dialog.EditBox or dialog.editBox
+end
+
+local function AskFriendName(key)
+    if not StaticPopup_Show or not StaticPopupDialogs then
+        return
+    end
+    StaticPopupDialogs.FRIENDSCRAFT_NAME = StaticPopupDialogs.FRIENDSCRAFT_NAME or {
+        text = "What do you call this friend?\n\nOnly you see this name. Leave it empty to use their character's name again.",
+        button1 = "Save",
+        button2 = "Cancel",
+        hasEditBox = true,
+        maxLetters = 24,
+        OnShow = function(self, data)
+            local box = PopupBox(self)
+            if box then
+                box:SetText(data and ns.FriendName(data) or "")
+                box:HighlightText()
+                box:SetFocus()
+            end
+        end,
+        OnAccept = function(self, data)
+            local box = PopupBox(self)
+            if data and box then
+                ns.SetFriendName(data, box:GetText())
+            end
+        end,
+        EditBoxOnEnterPressed = function(box, data)
+            local dialog = box:GetParent()
+            data = data or (dialog and dialog.data)
+            if data then
+                ns.SetFriendName(data, box:GetText())
+            end
+            if dialog then
+                dialog:Hide()
+            end
+        end,
+        EditBoxOnEscapePressed = function(box)
+            local dialog = box:GetParent()
+            if dialog then
+                dialog:Hide()
+            end
+        end,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+        preferredIndex = 3,
+    }
+    StaticPopup_Show("FRIENDSCRAFT_NAME", nil, nil, key)
+end
+
+-- Right-click on a friend's line: name them, hide them or show them again.
+local function FriendMenu(owner, key, label, hidden)
+    local function HideOrShow()
+        if hidden then
+            ns.SetHidden(key, false)
+        else
+            AskToHide(key, label)
+        end
+    end
+    if MenuUtil and MenuUtil.CreateContextMenu then
+        local ok = pcall(MenuUtil.CreateContextMenu, owner, function(_, root)
+            root:CreateTitle(label)
+            root:CreateButton(ns.FriendName(key) and "Change their name..." or "Name this friend...", function()
+                AskFriendName(key)
+            end)
+            if ns.FriendName(key) then
+                root:CreateButton("Use their character's name", function() ns.SetFriendName(key, nil) end)
+            end
+            root:CreateButton(hidden and "Show again" or "Hide...", HideOrShow)
+        end)
+        if ok then
+            return
+        end
+    end
+    HideOrShow()
+end
+
 -- Best skill in each profession over several characters.
 local function BestProfs(keys)
     local best, holders = {}, {}
@@ -1079,6 +1168,10 @@ local function BuildCrewPage()
         if text == "" or ns.LongName(key):lower():find(text, 1, true) then
             return true
         end
+        local nick = key ~= ns.me and ns.FriendName(ns.GroupOf(key))
+        if nick and nick:lower():find(text, 1, true) then
+            return true
+        end
         for _, e in ipairs(p.prof or {}) do
             if (ns.ShowSecondary() or not ns.IsSecondary(e)) and e.name:lower():find(text, 1, true) then
                 return true
@@ -1232,7 +1325,7 @@ local function BuildCrewPage()
                 end
             end
             grp.rep = rep
-            grp.label = g == mine and "You" or ns.ShortName(rep)
+            grp.label = g == mine and "You" or ns.FriendName(g) or ns.ShortName(rep)
             if #grp.shown > 0 and not grp.guild then
                 rows[#rows + 1] = grp
             end
@@ -1390,8 +1483,8 @@ local function BuildCrewPage()
                 if grp.key == mine then
                     item.hint = "Click to open or close."
                 else
-                    item.hint = hidden and "Click to open or close. Right-click to show again."
-                        or "Click to open or close. Right-click to hide (asks first)."
+                    item.hint = hidden and "Click to open or close. Right-click to name them or show again."
+                        or "Click to open or close. Right-click to name them or hide."
                 end
                 item.tooltip = function(tt)
                     GroupTooltip(tt, { name = grp.label, size = item.size, onlineCount = item.onlineCount, gold = item.totalGold, profs = profs, hint = item.hint })
@@ -1399,12 +1492,8 @@ local function BuildCrewPage()
                 item.onClick = function(button)
                     GameTooltip:Hide()
                     if button == "RightButton" then
-                        if grp.key == mine then
-                            return
-                        elseif hidden then
-                            ns.SetHidden(grp.key, false)
-                        else
-                            AskToHide(grp.key, grp.label)
+                        if grp.key ~= mine then
+                            FriendMenu(page.frame, grp.key, grp.label, hidden)
                         end
                         return
                     end

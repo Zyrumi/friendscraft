@@ -16,6 +16,7 @@ local DEFAULTS = {
     crew = {},     -- [name] = true for friends found with FriendsCraft (see FullName)
     people = {},   -- [name] = record, see Data.lua
     hidden = {},   -- [name] = true for people you chose to hide
+    names = {},    -- ["#tag" or name] = what you call that friend (only on your PC, never sent)
     minimap = { angle = 215, hide = false },
     tooltips = true, -- crew lines on item tooltips
     tag = false,     -- random tag shared by all your characters (see below)

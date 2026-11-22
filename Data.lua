@@ -55,6 +55,27 @@ function ns.GroupOf(key)
     return key
 end
 
+-- What you call a friend (a group key from GroupOf), or nil for automatic.
+function ns.FriendName(group)
+    local n = ns.db.names and ns.db.names[group]
+    return type(n) == "string" and n ~= "" and n or nil
+end
+
+-- Sets (or with nil/"" clears) what you call a friend. Stays on your PC.
+function ns.SetFriendName(group, text)
+    if type(group) ~= "string" then
+        return
+    end
+    text = type(text) == "string" and strtrim((text:gsub("|", ""))) or ""
+    if #text > 24 then
+        text = text:sub(1, 24)
+    end
+    ns.db.names = ns.db.names or {}
+    ns.db.names[group] = text ~= "" and text or nil
+    ns.Changed()
+    if ns.RefreshUI then ns.RefreshUI() end
+end
+
 -- Hidden by itself or because its friend is hidden. Never your own.
 function ns.IsHidden(key)
     if key == ns.me then
