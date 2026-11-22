@@ -603,10 +603,41 @@ local function SetBlizzardTabsChecked(cf, checked)
     end
 end
 
+-- The guild chat's scroll bar is drawn on the HIGH layer, above the whole
+-- window, so no frame level covers it. While our page is open it moves down
+-- to the window's own layer; leaving the page puts it back.
+local chatBarStrata
+local function ChatBar()
+    local cf = CommunitiesFrame
+    local chat = cf and cf.Chat
+    return type(chat) == "table" and chat.ScrollBar or nil
+end
+
+local function LowerChatBar()
+    local bar = ChatBar()
+    if chatBarStrata or not bar or not bar.GetFrameStrata then
+        return
+    end
+    local strata = bar:GetFrameStrata()
+    if type(strata) == "string" then
+        chatBarStrata = strata
+        bar:SetFrameStrata(panel:GetFrameStrata() or "MEDIUM")
+    end
+end
+
+local function RestoreChatBar()
+    local bar = ChatBar()
+    if chatBarStrata and bar then
+        bar:SetFrameStrata(chatBarStrata)
+    end
+    chatBarStrata = nil
+end
+
 local function HidePanel()
     if panel and panel:IsShown() then
         panel:Hide()
     end
+    RestoreChatBar()
     if tab then
         tab:SetChecked(false)
     end
@@ -614,6 +645,7 @@ end
 
 local function ShowPanel()
     panel:Show()
+    LowerChatBar()
     SetBlizzardTabsChecked(CommunitiesFrame, false)
     tab:SetChecked(true)
     Query()
