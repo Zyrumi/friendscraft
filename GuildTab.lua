@@ -21,7 +21,9 @@ local CLASS_BY_ID = { [1] = "WARRIOR", [2] = "PALADIN", [3] = "HUNTER", [4] = "R
 local GATHERING = { [182] = true, [186] = true, [393] = true }
 local SECONDARY = { [185] = true, [129] = true, [356] = true }
 local BLIZZ_TABS = { "ChatTab", "RosterTab", "GuildBenefitsTab", "GuildInfoTab", "GuildPreferredPlaySettingsTab" }
-local NAME_W, LEVEL_W, BAR_W = 190, 30, 140
+local NAME_W, LEVEL_W, BAR_W = 190, 30, 150
+local ROW_H = 26     -- a bit taller than FriendsCraft's lists, for the game's skill bars
+local OFFLINE = 0.7  -- offline names keep their class color, a bit darker
 local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
 
 local U -- ns.UI, set up when the guild window loads
@@ -361,6 +363,50 @@ end
 -- Rows
 -------------------------------------------------------------------------------
 
+-- The bar from the game's own Skills panel (SkillsBarTemplate: blue fill,
+-- number in the middle); FriendsCraft's plain bar where it's missing.
+local function SkillBar(parent, w, h)
+    for _, template in ipairs({ "SkillsBarTemplate", "ColoredProgressBarTemplate" }) do
+        local ok, bar = pcall(CreateFrame, "StatusBar", nil, parent, template)
+        if ok and bar and type(bar.SetFillPercent) == "function" then
+            bar:SetSize(w, h)
+            local types = ColoredProgressBarMixin and ColoredProgressBarMixin.ColorType
+            if types and types.Blue and bar.SetFillTextureByColorType then
+                pcall(bar.SetFillTextureByColorType, bar, types.Blue)
+            end
+            if bar.UpdateBarColor and WHITE_FONT_COLOR then
+                pcall(bar.UpdateBarColor, bar, WHITE_FONT_COLOR)
+            end
+            bar.native = true
+            return bar
+        elseif ok and bar then
+            bar:Hide()
+        end
+    end
+    local bar = U.ProgressBar(parent)
+    bar:SetSize(w, math.max(12, h - 8))
+    bar:SetStatusBarColor(0.27, 0.55, 0.22)
+    return bar
+end
+
+local function SetSkill(bar, skill, max)
+    max = (max and max > 0) and max or math.max(skill, 1)
+    local text = skill .. " / " .. max
+    if bar.native then
+        pcall(bar.SetFillPercent, bar, math.min(skill / max, 1))
+        if bar.UpdateBarProgressText and bar.TryShowBarProgressText then
+            pcall(bar.UpdateBarProgressText, bar, text)
+            pcall(bar.TryShowBarProgressText, bar)
+        elseif bar.SetText then
+            pcall(bar.SetText, bar, text)
+        end
+    else
+        bar:SetMinMaxValues(0, max)
+        bar:SetValue(math.min(skill, max))
+        bar.text:SetText(text)
+    end
+end
+
 local function MakeRow(parent)
     local row = CreateFrame("Button", nil, parent)
     U.RowScripts(row)
@@ -387,10 +433,8 @@ local function MakeRow(parent)
     row.level:SetPoint("LEFT", 30 + NAME_W, 0)
     row.level:SetWidth(LEVEL_W)
     row.level:SetJustifyH("RIGHT")
-    row.bar = U.ProgressBar(row)
-    row.bar:SetSize(BAR_W, 14)
+    row.bar = SkillBar(row, BAR_W, ROW_H - 2)
     row.bar:SetPoint("LEFT", 30 + NAME_W + LEVEL_W + 12, 0)
-    row.bar:SetStatusBarColor(0.27, 0.55, 0.22)
     row.none = U.Ink(row, "GameFontHighlightSmall", "no skill info", U.INK_DIM)
     row.none:SetPoint("LEFT", row.bar, "LEFT", 4, 0)
     row.where = U.Ink(row, "GameFontHighlightSmall", "", U.INK_DIM)
@@ -440,19 +484,13 @@ local function FillRow(row, item)
     local m = item.member
     U.SetClassIcon(row.classIcon, m.class)
     row.name:SetText(m.key)
-    if m.online then
-        local r, g, b = U.ClassColor(m.class)
-        row.name:SetTextColor(r, g, b)
-    else
-        row.name:SetTextColor(U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
-    end
+    local r, g, b = U.ClassColor(m.class)
+    local k = m.online and 1 or OFFLINE
+    row.name:SetTextColor(r * k, g * k, b * k)
     row.level:SetText(m.level and tostring(m.level) or "")
     local p = m.prof
     if p and p.skill then
-        local max = (p.max and p.max > 0) and p.max or math.max(p.skill, 1)
-        row.bar:SetMinMaxValues(0, max)
-        row.bar:SetValue(math.min(p.skill, max))
-        row.bar.text:SetText(p.skill .. " / " .. max)
+        SetSkill(row.bar, p.skill, p.max)
         row.none:Hide()
     else
         row.bar:Hide()
@@ -719,7 +757,7 @@ local function BuildPanel(cf)
     line:SetPoint("BOTTOMRIGHT", 0, 0)
     line:SetColorTexture(U.GOLD[1], U.GOLD[2], U.GOLD[3], 0.35)
 
-    list = U.ScrollList(panel, U.ROW_H, MakeRow, FillRow)
+    list = U.ScrollList(panel, ROW_H, MakeRow, FillRow)
     list.frame:SetPoint("TOPLEFT", 8, -58)
     list.frame:SetPoint("BOTTOMRIGHT", -6, 24)
 
@@ -890,20 +928,18 @@ local function BuildRecipeWindow()
         c:SetPoint("TOPLEFT", 16, -40)
         c:SetPoint("BOTTOMRIGHT", -16, 16)
     end
-    f.skill = U.ProgressBar(c)
-    f.skill:SetSize(180, 16)
+    f.skill = SkillBar(c, 200, 26)
     f.skill:SetPoint("TOPLEFT", 4, -4)
-    f.skill:SetStatusBarColor(0.27, 0.55, 0.22)
     f.source = U.Ink(c, "GameFontHighlightSmall", "", U.INK_DIM)
-    f.source:SetPoint("TOPLEFT", 4, -26)
+    f.source:SetPoint("TOPLEFT", 4, -34)
     f.source:SetPoint("RIGHT", -4, 0)
     f.source:SetWordWrap(false)
     f.search = U.SearchInput(c, 300, "Search their recipes")
-    f.search:SetPoint("TOPLEFT", 6, -44)
+    f.search:SetPoint("TOPLEFT", 6, -52)
     f.search:SetPoint("RIGHT", -4, 0)
     f.search:HookScript("OnTextChanged", function() f:Fill() end)
     f.list = U.ScrollList(c, U.ROW_H, U.IconRow, U.FillIconRow)
-    f.list.frame:SetPoint("TOPLEFT", 0, -72)
+    f.list.frame:SetPoint("TOPLEFT", 0, -80)
     f.list.frame:SetPoint("BOTTOMRIGHT", 0, 18)
     f.count = U.Ink(c, "GameFontHighlightSmall", "", U.INK_DIM)
     f.count:SetPoint("BOTTOMLEFT", 4, 2)
@@ -969,10 +1005,7 @@ local function OpenRecipes(s, m)
     end
     local p = m.prof
     if p and p.skill then
-        local max = (p.max and p.max > 0) and p.max or math.max(p.skill, 1)
-        f.skill:SetMinMaxValues(0, max)
-        f.skill:SetValue(math.min(p.skill, max))
-        f.skill.text:SetText(p.skill .. " / " .. max)
+        SetSkill(f.skill, p.skill, p.max)
         f.skill:Show()
         local ago = p.source ~= "fc" and Ago(p.seen)
         f.source:SetText(p.source == "fc" and "From FriendsCraft" or ("From the armory" .. (ago and (", their last logout " .. ago) or "")))
