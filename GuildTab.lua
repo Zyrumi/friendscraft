@@ -27,7 +27,7 @@ local OFFLINE = 0.7  -- offline names keep their class color, a bit darker
 local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
 
 local U -- ns.UI, set up when the guild window loads
-local panel, tab, list, search, offlineBox, footer, foldAll
+local panel, tab, list, search, offlineBox, secondaryBox, footer, foldAll
 local recipeWin -- one member's recipes, opened by clicking them
 local shownIds = {} -- profession ids on the page, for "Collapse all"
 local folded = {} -- [profession id] = true while folded (this session only)
@@ -575,6 +575,16 @@ local function Refresh()
         return
     end
     local sections, known, total, armory = Build()
+    -- Cooking, First Aid and Fishing out of the way when ticked.
+    if ns.db.guildHideSecondary == true then
+        local kept = {}
+        for _, s in ipairs(sections) do
+            if not SECONDARY[s.id] then
+                kept[#kept + 1] = s
+            end
+        end
+        sections = kept
+    end
     shownIds = {}
     local anyOpen = false
     for _, s in ipairs(sections) do
@@ -643,6 +653,7 @@ local function Refresh()
     end
     footer:SetText(text)
     offlineBox.SyncFilter()
+    secondaryBox.SyncFilter()
 end
 
 local function RefreshSoon()
@@ -864,9 +875,20 @@ local function BuildPanel(cf)
     list.frame:SetPoint("TOPLEFT", 8, -58)
     list.frame:SetPoint("BOTTOMRIGHT", -6, 24)
 
+    -- The top row is full (search, offline, collapse), so this one sits at
+    -- the bottom right, beside the footer.
+    secondaryBox = U.Toggle(panel, "Hide secondary professions",
+        function() return ns.db.guildHideSecondary == true end,
+        function(on)
+            ns.db.guildHideSecondary = on
+            Refresh()
+        end)
+    secondaryBox:SetPoint("BOTTOMRIGHT", -150, 1)
+
     footer = U.Ink(panel, "GameFontHighlightSmall", "", U.INK_DIM)
     footer:SetPoint("BOTTOMLEFT", 12, 6)
-    footer:SetPoint("BOTTOMRIGHT", -12, 6)
+    footer:SetPoint("BOTTOMRIGHT", secondaryBox, "BOTTOMLEFT", -8, 5)
+    footer:SetJustifyH("LEFT")
     footer:SetWordWrap(false)
 
     panel:SetScript("OnShow", function() list:SetItems(list.items) end)
@@ -1157,4 +1179,5 @@ end
 ns.GuildTab = { Build = Build, Refresh = Refresh, Show = ShowPanel, Hide = HidePanel,
     Panel = function() return panel end, Tab = function() return tab end, List = function() return list end,
     Search = function() return search end, FoldAll = function() return foldAll end,
+    SecondaryBox = function() return secondaryBox end,
     OpenRecipes = OpenRecipes, RecipeWindow = function() return recipeWin end }
