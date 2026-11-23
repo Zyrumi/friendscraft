@@ -1063,9 +1063,9 @@ local function BuildRecipeWindow()
     f.count:SetPoint("BOTTOMLEFT", 4, 6)
     -- Common white and grey recipes out of the way; a search still finds them.
     f.best = U.Toggle(c, "Hide white and grey",
-        function() return ns.db.guildRecipesBest ~= false end,
+        function() return ns.db.guildHideCommon == true end,
         function(on)
-            ns.db.guildRecipesBest = on
+            ns.db.guildHideCommon = on
             f:Fill()
         end)
     f.best:SetPoint("BOTTOMRIGHT", -112, 0)
@@ -1085,7 +1085,7 @@ local function BuildRecipeWindow()
         end
         local p = m.prof or {}
         local q = strtrim(self.search:GetText() or ""):lower()
-        local best = q == "" and ns.db.guildRecipesBest ~= false
+        local best = q == "" and ns.db.guildHideCommon == true
         self.best.SyncFilter()
         local items, hidden = {}, 0
         for _, r in ipairs(RankedRecipes(p)) do

@@ -28,7 +28,7 @@ local DEFAULTS = {
     consentBnet = false,  -- answers were copied to the Battle.net friend they belong to once
     guildShare = true, -- share professions, skills and recipes with your guild
     guildOffline = true, -- Professions tab in the guild window lists offline members too
-    guildRecipesBest = true, -- a member's recipe window hides white and grey recipes
+    guildHideCommon = false, -- a member's recipe window hides white and grey recipes (off unless ticked)
 }
 
 -------------------------------------------------------------------------------
@@ -247,6 +247,7 @@ handlers.ADDON_LOADED = { function(name)
     end
     FriendsCraftDB = MergeDefaults(DEFAULTS, FriendsCraftDB or {})
     ns.db = FriendsCraftDB
+    ns.db.guildRecipesBest = nil -- 0.6.0 saved this as on by default; replaced by guildHideCommon
     -- A random tag, made once and the same for all your characters. Friends
     -- use it to put your characters together under one name. It says
     -- nothing about your account.
