@@ -21,7 +21,7 @@ local CLASS_BY_ID = { [1] = "WARRIOR", [2] = "PALADIN", [3] = "HUNTER", [4] = "R
 local GATHERING = { [182] = true, [186] = true, [393] = true }
 local SECONDARY = { [185] = true, [129] = true, [356] = true }
 local BLIZZ_TABS = { "ChatTab", "RosterTab", "GuildBenefitsTab", "GuildInfoTab", "GuildPreferredPlaySettingsTab" }
-local NAME_W, LEVEL_W = 230, 30 -- the skill bar takes the rest of the row
+local NAME_W, LEVEL_W, BAR_W = 230, 30, 180 -- BAR_W: a bit wider than the Skills panel's 160
 local ROW_H = 26     -- a bit taller than FriendsCraft's lists, for the game's skill bars
 local OFFLINE = 0.7  -- offline names keep their class color, a bit darker
 local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
@@ -477,9 +477,8 @@ local function MakeRow(parent)
     row.level:SetPoint("LEFT", 30 + NAME_W, 0)
     row.level:SetWidth(LEVEL_W)
     row.level:SetJustifyH("RIGHT")
-    row.bar = SkillBar(row, 160, ROW_H - 2)
+    row.bar = SkillBar(row, BAR_W, ROW_H - 2)
     row.bar:SetPoint("LEFT", 30 + NAME_W + LEVEL_W + 16, 0)
-    row.bar:SetPoint("RIGHT", -8, 0)
     row.none = U.Ink(row, "GameFontHighlightSmall", "no skill info", U.INK_DIM)
     row.none:SetPoint("LEFT", row.bar, "LEFT", 4, 0)
 
