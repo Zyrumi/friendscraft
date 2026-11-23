@@ -28,6 +28,7 @@ local DEFAULTS = {
     consentBnet = false,  -- answers were copied to the Battle.net friend they belong to once
     guildShare = true, -- share professions, skills and recipes with your guild
     guildOffline = true, -- Professions tab in the guild window lists offline members too
+    guildRecipesBest = true, -- a member's recipe window hides white and grey recipes
 }
 
 -------------------------------------------------------------------------------

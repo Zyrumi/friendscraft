@@ -334,28 +334,67 @@ local function RowScripts(row)
     end)
 end
 
-local function ScrollList(parent, rowH, makeRow, fillRow)
+-- The game's own slim scroll bar (MinimalScrollBar: arrows, track, thumb),
+-- the one the guild window's lists use. Driven by list offsets, not a
+-- ScrollBox. nil where the game doesn't have it.
+local function NativeScrollBar(list, f)
+    if not (ScrollBarMixin and ScrollBarMixin.Event and ScrollBarMixin.Event.OnScroll) then
+        return nil
+    end
+    local ok, bar = pcall(CreateFrame, "EventFrame", nil, f, "MinimalScrollBar")
+    if not ok or not bar or type(bar.SetScrollPercentage) ~= "function" or type(bar.RegisterCallback) ~= "function" then
+        if ok and bar then
+            bar:Hide()
+        end
+        return nil
+    end
+    bar:SetPoint("TOPRIGHT", 0, 0)
+    bar:SetPoint("BOTTOMRIGHT", 0, 0)
+    bar.useProportionalThumb = true
+    bar:RegisterCallback(ScrollBarMixin.Event.OnScroll, function(_, pct)
+        if list.syncing or type(pct) ~= "number" then
+            return
+        end
+        list:SetOffset(pct * math.max(0, #list.items - list.count))
+    end, list)
+    -- Called from Draw: where the list is now, how much of it shows, one
+    -- row per arrow click.
+    function bar.FCSync(max)
+        list.syncing = true
+        pcall(bar.SetPanExtentPercentage, bar, max > 0 and (1 / max) or 0)
+        pcall(bar.SetVisibleExtentPercentage, bar, #list.items > 0 and (list.count / #list.items) or 1)
+        pcall(bar.SetScrollPercentage, bar, max > 0 and (list.offset / max) or 0, true)
+        list.syncing = false
+    end
+    return bar
+end
+
+-- opts.native: use the game's own scroll bar where it has one.
+local function ScrollList(parent, rowH, makeRow, fillRow, opts)
     local list = { rows = {}, items = {}, offset = 0, count = 0 }
     local f = CreateFrame("Frame", nil, parent)
     list.frame = f
     f:EnableMouseWheel(true)
 
-    local bar = CreateFrame("Slider", nil, f)
-    bar:SetWidth(10)
-    bar:SetPoint("TOPRIGHT", 0, 0)
-    bar:SetPoint("BOTTOMRIGHT", 0, 0)
-    bar:SetOrientation("VERTICAL")
-    local track = bar:CreateTexture(nil, "BACKGROUND")
-    track:SetAllPoints()
-    track:SetColorTexture(0, 0, 0, 0.35)
-    local thumb = bar:CreateTexture(nil, "OVERLAY")
-    thumb:SetColorTexture(0.72, 0.64, 0.48, 0.85)
-    thumb:SetSize(8, 30)
-    bar:SetThumbTexture(thumb)
-    list.thumb = thumb
-    bar:SetMinMaxValues(0, 0)
-    bar:SetValueStep(1)
-    bar:SetValue(0)
+    local native = opts and opts.native and NativeScrollBar(list, f)
+    local bar = native or CreateFrame("Slider", nil, f)
+    if not native then
+        bar:SetWidth(10)
+        bar:SetPoint("TOPRIGHT", 0, 0)
+        bar:SetPoint("BOTTOMRIGHT", 0, 0)
+        bar:SetOrientation("VERTICAL")
+        local track = bar:CreateTexture(nil, "BACKGROUND")
+        track:SetAllPoints()
+        track:SetColorTexture(0, 0, 0, 0.35)
+        local thumb = bar:CreateTexture(nil, "OVERLAY")
+        thumb:SetColorTexture(0.72, 0.64, 0.48, 0.85)
+        thumb:SetSize(8, 30)
+        bar:SetThumbTexture(thumb)
+        list.thumb = thumb
+        bar:SetMinMaxValues(0, 0)
+        bar:SetValueStep(1)
+        bar:SetValue(0)
+    end
     list.bar = bar
 
     function list:Visible()
@@ -393,9 +432,13 @@ local function ScrollList(parent, rowH, makeRow, fillRow)
             end
         end
         local max = math.max(0, #self.items - self.count)
+        bar:SetShown(max > 0)
+        if native then
+            native.FCSync(max)
+            return
+        end
         bar:SetMinMaxValues(0, max)
         bar:SetValue(self.offset)
-        bar:SetShown(max > 0)
         local h = f:GetHeight()
         if max > 0 and type(h) == "number" and h > 0 then
             self.thumb:SetHeight(math.max(24, h * self.count / #self.items))
@@ -418,7 +461,9 @@ local function ScrollList(parent, rowH, makeRow, fillRow)
         self:Draw()
     end
 
-    bar:SetScript("OnValueChanged", function(_, value) list:SetOffset(value) end)
+    if not native then
+        bar:SetScript("OnValueChanged", function(_, value) list:SetOffset(value) end)
+    end
     f:SetScript("OnMouseWheel", function(_, delta) list:SetOffset(list.offset + (delta > 0 and -3 or 3)) end)
     f:SetScript("OnSizeChanged", function() list:SetItems(list.items) end)
     return list

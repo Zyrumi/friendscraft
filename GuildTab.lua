@@ -21,7 +21,7 @@ local CLASS_BY_ID = { [1] = "WARRIOR", [2] = "PALADIN", [3] = "HUNTER", [4] = "R
 local GATHERING = { [182] = true, [186] = true, [393] = true }
 local SECONDARY = { [185] = true, [129] = true, [356] = true }
 local BLIZZ_TABS = { "ChatTab", "RosterTab", "GuildBenefitsTab", "GuildInfoTab", "GuildPreferredPlaySettingsTab" }
-local NAME_W, LEVEL_W, BAR_W = 190, 30, 150
+local NAME_W, LEVEL_W = 230, 30 -- the skill bar takes the rest of the row
 local ROW_H = 26     -- a bit taller than FriendsCraft's lists, for the game's skill bars
 local OFFLINE = 0.7  -- offline names keep their class color, a bit darker
 local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
@@ -350,12 +350,56 @@ local function CountText(s)
     return Plural(s.count, "member", "members") .. ", " .. (s.online > 0 and (s.online .. " online") or "nobody online")
 end
 
+-- Quality and item level of what a recipe makes; nil until the game has the
+-- item (GET_ITEM_INFO_RECEIVED redraws when it arrives).
+local function ItemStats(id)
+    if not id then
+        return nil, nil
+    end
+    local q, ilvl
+    if GetItemInfo then
+        local ok, name, _, quality, level = pcall(GetItemInfo, id)
+        if ok and name then
+            q, ilvl = Plain(quality), Plain(level)
+        end
+    end
+    q = q or ns.ItemQuality(id)
+    if not q and C_Item and C_Item.RequestLoadItemDataByID then
+        pcall(C_Item.RequestLoadItemDataByID, id)
+    end
+    return tonumber(q), tonumber(ilvl)
+end
+
+-- Best first: the rarest crafted item, then the highest item level (a fair
+-- stand-in for the skill a recipe needs), then by name. Recipes that make no
+-- item (enchants, for one) go last, by name.
+-- { { name, id, quality, level } }
+local function RankedRecipes(prof)
+    local out = {}
+    for name, item in pairs(prof and prof.recipes or {}) do
+        local id = type(item) == "number" and item or nil
+        local q, ilvl = ItemStats(id)
+        out[#out + 1] = { name = name, id = id, quality = q, level = ilvl }
+    end
+    table.sort(out, function(x, y)
+        local qx, qy = x.quality or -1, y.quality or -1
+        if qx ~= qy then
+            return qx > qy
+        end
+        local lx, ly = x.level or -1, y.level or -1
+        if lx ~= ly then
+            return lx > ly
+        end
+        return x.name < y.name
+    end)
+    return out
+end
+
 local function SortedRecipes(prof)
     local out = {}
-    for r in pairs(prof and prof.recipes or {}) do
-        out[#out + 1] = r
+    for i, r in ipairs(RankedRecipes(prof)) do
+        out[i] = r.name
     end
-    table.sort(out)
     return out
 end
 
@@ -433,14 +477,11 @@ local function MakeRow(parent)
     row.level:SetPoint("LEFT", 30 + NAME_W, 0)
     row.level:SetWidth(LEVEL_W)
     row.level:SetJustifyH("RIGHT")
-    row.bar = SkillBar(row, BAR_W, ROW_H - 2)
-    row.bar:SetPoint("LEFT", 30 + NAME_W + LEVEL_W + 12, 0)
+    row.bar = SkillBar(row, 160, ROW_H - 2)
+    row.bar:SetPoint("LEFT", 30 + NAME_W + LEVEL_W + 16, 0)
+    row.bar:SetPoint("RIGHT", -8, 0)
     row.none = U.Ink(row, "GameFontHighlightSmall", "no skill info", U.INK_DIM)
     row.none:SetPoint("LEFT", row.bar, "LEFT", 4, 0)
-    row.where = U.Ink(row, "GameFontHighlightSmall", "", U.INK_DIM)
-    row.where:SetPoint("LEFT", row.bar, "RIGHT", 12, 0)
-    row.where:SetPoint("RIGHT", -6, 0)
-    row.where:SetWordWrap(false)
 
     row.sub = U.Ink(row, "GameFontHighlightSmall", "", U.INK_DIM)
     row.sub:SetPoint("LEFT", 30, 0)
@@ -457,7 +498,7 @@ local function FillRow(row, item)
     row.hLine:SetShown(heading)
     row.hIcon:SetShown(heading)
     row.hFold:SetShown(heading)
-    for _, part in ipairs({ row.classIcon, row.name, row.level, row.bar, row.none, row.where }) do
+    for _, part in ipairs({ row.classIcon, row.name, row.level, row.bar, row.none }) do
         part:SetShown(member)
     end
     row.sub:SetShown(sub)
@@ -496,12 +537,14 @@ local function FillRow(row, item)
         row.bar:Hide()
         row.none:Show()
     end
-    row.where:SetText(m.online and (m.zone or "") or AwayText(m.away))
 end
 
 local function MemberTooltip(tt, s, m)
     local r, g, b = U.ClassColor(m.class)
     tt:SetText(m.key, r, g, b)
+    -- Where they are lives here, not in a column.
+    local where = m.online and (m.zone and m.zone ~= "" and ("Online, " .. m.zone) or "Online") or AwayText(m.away)
+    tt:AddLine(where, U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3])
     local p = m.prof
     if p and p.skill then
         tt:AddLine(s.name .. ": " .. p.skill .. (p.max and (" / " .. p.max) or ""), 1, 1, 1)
@@ -671,11 +714,72 @@ local function RestoreChatBar()
     chatBarStrata = nil
 end
 
+-- The roster page's buttons along the bottom edge (Invite Member, the
+-- officers' Guild Control / Recruitment, Guild Log) sit outside our panel and
+-- would stay on our page. They're faded out and made unclickable rather than
+-- hidden, so the game stays in charge of when each one shows.
+local BOTTOM_BUTTONS = { "InviteButton", "CommunitiesControlFrame", "GuildLogButton" }
+local muted -- { [frame] = mouse was enabled }
+
+local function Mute(f)
+    if f.IsMouseEnabled and f.EnableMouse then
+        muted[f] = f:IsMouseEnabled()
+        f:EnableMouse(false)
+    else
+        muted[f] = false
+    end
+    if f.GetChildren then
+        for _, child in ipairs({ f:GetChildren() }) do
+            Mute(child)
+        end
+    end
+end
+
+local function MuteBottomButtons()
+    local cf = CommunitiesFrame
+    if muted or not cf then
+        return
+    end
+    muted = {}
+    for _, key in ipairs(BOTTOM_BUTTONS) do
+        local f = rawget(cf, key)
+        if type(f) == "table" and f.SetAlpha then
+            f:SetAlpha(0)
+            Mute(f)
+        end
+    end
+    -- The roster's member popup belongs to the roster page.
+    local detail = rawget(cf, "GuildMemberDetailFrame")
+    if type(detail) == "table" and detail.Hide then
+        detail:Hide()
+    end
+end
+
+local function RestoreBottomButtons()
+    local cf = CommunitiesFrame
+    if not muted or not cf then
+        return
+    end
+    for f, mouse in pairs(muted) do
+        if mouse then
+            f:EnableMouse(true)
+        end
+    end
+    for _, key in ipairs(BOTTOM_BUTTONS) do
+        local f = rawget(cf, key)
+        if type(f) == "table" and f.SetAlpha then
+            f:SetAlpha(1)
+        end
+    end
+    muted = nil
+end
+
 local function HidePanel()
     if panel and panel:IsShown() then
         panel:Hide()
     end
     RestoreChatBar()
+    RestoreBottomButtons()
     if recipeWin then
         recipeWin:Hide()
     end
@@ -687,6 +791,7 @@ end
 local function ShowPanel()
     panel:Show()
     LowerChatBar()
+    MuteBottomButtons()
     SetBlizzardTabsChecked(CommunitiesFrame, false)
     tab:SetChecked(true)
     Query()
@@ -749,15 +854,14 @@ local function BuildPanel(cf)
     local lvl = Col("Lvl", 30 + NAME_W)
     lvl:SetWidth(LEVEL_W)
     lvl:SetJustifyH("RIGHT")
-    Col("Skill", 30 + NAME_W + LEVEL_W + 12)
-    Col("Zone", 30 + NAME_W + LEVEL_W + 12 + BAR_W + 12)
+    Col("Skill", 30 + NAME_W + LEVEL_W + 16)
     local line = cols:CreateTexture(nil, "ARTWORK")
     line:SetHeight(1)
     line:SetPoint("BOTTOMLEFT", 0, 0)
     line:SetPoint("BOTTOMRIGHT", 0, 0)
     line:SetColorTexture(U.GOLD[1], U.GOLD[2], U.GOLD[3], 0.35)
 
-    list = U.ScrollList(panel, ROW_H, MakeRow, FillRow)
+    list = U.ScrollList(panel, ROW_H, MakeRow, FillRow, { native = true })
     list.frame:SetPoint("TOPLEFT", 8, -58)
     list.frame:SetPoint("BOTTOMRIGHT", -6, 24)
 
@@ -880,6 +984,21 @@ end)
 ns.On("GUILD_TRADESKILL_UPDATE", RefreshSoon)
 ns.On("GUILD_ROSTER_UPDATE", RefreshSoon)
 
+-- Item qualities and levels arrive a moment after we ask; re-sort then.
+local recipesPending = false
+ns.On("GET_ITEM_INFO_RECEIVED", function()
+    if recipesPending or not recipeWin or not recipeWin:IsShown() then
+        return
+    end
+    recipesPending = true
+    C_Timer.After(0.3, ns.Safe(function()
+        recipesPending = false
+        if recipeWin:IsShown() then
+            recipeWin:Fill()
+        end
+    end, "guild recipes"))
+end)
+
 -------------------------------------------------------------------------------
 -- One member's recipes (click a member). The game's own "view their recipes"
 -- is switched off on Forever, so this shows what FriendsCraft and the armory
@@ -938,11 +1057,19 @@ local function BuildRecipeWindow()
     f.search:SetPoint("TOPLEFT", 6, -52)
     f.search:SetPoint("RIGHT", -4, 0)
     f.search:HookScript("OnTextChanged", function() f:Fill() end)
-    f.list = U.ScrollList(c, U.ROW_H, U.IconRow, U.FillIconRow)
+    f.list = U.ScrollList(c, U.ROW_H, U.IconRow, U.FillIconRow, { native = true })
     f.list.frame:SetPoint("TOPLEFT", 0, -80)
-    f.list.frame:SetPoint("BOTTOMRIGHT", 0, 18)
+    f.list.frame:SetPoint("BOTTOMRIGHT", 0, 26)
     f.count = U.Ink(c, "GameFontHighlightSmall", "", U.INK_DIM)
-    f.count:SetPoint("BOTTOMLEFT", 4, 2)
+    f.count:SetPoint("BOTTOMLEFT", 4, 6)
+    -- Common white and grey recipes out of the way; a search still finds them.
+    f.best = U.Toggle(c, "Hide white and grey",
+        function() return ns.db.guildRecipesBest ~= false end,
+        function(on)
+            ns.db.guildRecipesBest = on
+            f:Fill()
+        end)
+    f.best:SetPoint("BOTTOMRIGHT", -112, 0)
 
     function f:SetTitleText(text)
         if self.SetTitle then
@@ -959,11 +1086,14 @@ local function BuildRecipeWindow()
         end
         local p = m.prof or {}
         local q = strtrim(self.search:GetText() or ""):lower()
-        local items = {}
-        for _, name in ipairs(SortedRecipes(p)) do
-            if q == "" or name:lower():find(q, 1, true) then
-                local item = p.recipes[name]
-                local id = type(item) == "number" and item or nil
+        local best = q == "" and ns.db.guildRecipesBest ~= false
+        self.best.SyncFilter()
+        local items, hidden = {}, 0
+        for _, r in ipairs(RankedRecipes(p)) do
+            local name, id = r.name, r.id
+            if best and r.quality and r.quality <= 1 then
+                hidden = hidden + 1
+            elseif q == "" or name:lower():find(q, 1, true) then
                 items[#items + 1] = {
                     icon = id and ns.ItemIcon(id) or s.icon or 134400,
                     text = name,
@@ -979,11 +1109,12 @@ local function BuildRecipeWindow()
             end
         end
         if #items == 0 then
-            items[1] = { icon = s.icon or 134400, text = q ~= "" and "No recipe matches that." or "No recipes known yet.",
-                color = U.INK_DIM }
+            local text = q ~= "" and "No recipe matches that." or hidden > 0 and "Only white and grey recipes."
+                or "No recipes known yet."
+            items[1] = { icon = s.icon or 134400, text = text, color = U.INK_DIM }
         end
         self.list:SetItems(items)
-        self.count:SetText(Plural(p.count or 0, "recipe", "recipes"))
+        self.count:SetText(Plural(p.count or 0, "recipe", "recipes") .. (hidden > 0 and (", " .. hidden .. " hidden") or ""))
     end
     return f
 end
