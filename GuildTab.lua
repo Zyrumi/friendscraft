@@ -27,7 +27,7 @@ local OFFLINE = 0.7  -- offline names keep their class color, a bit darker
 local CAN_MAKE_SHOWN = 4 -- "Can make" names this many, then "+N more"
 
 local U -- ns.UI, set up when the guild window loads
-local panel, tab, list, search, offlineBox, secondaryBox, footer, foldAll
+local panel, tab, list, search, offlineBox, gatheringBox, secondaryBox, footer, foldAll
 local recipeWin -- one member's recipes, opened by clicking them
 local shownIds = {} -- profession ids on the page, for "Collapse all"
 local folded = {} -- [profession id] = true while folded (this session only)
@@ -575,11 +575,13 @@ local function Refresh()
         return
     end
     local sections, known, total, armory = Build()
-    -- Cooking, First Aid and Fishing out of the way when ticked.
-    if ns.db.guildHideSecondary == true then
+    -- Gathering (Herbalism, Mining, Skinning) and secondary (Cooking, First
+    -- Aid, Fishing) professions out of the way when ticked.
+    local hideGathering, hideSecondary = ns.db.guildHideGathering == true, ns.db.guildHideSecondary == true
+    if hideGathering or hideSecondary then
         local kept = {}
         for _, s in ipairs(sections) do
-            if not SECONDARY[s.id] then
+            if not (hideGathering and GATHERING[s.id]) and not (hideSecondary and SECONDARY[s.id]) then
                 kept[#kept + 1] = s
             end
         end
@@ -653,6 +655,7 @@ local function Refresh()
     end
     footer:SetText(text)
     offlineBox.SyncFilter()
+    gatheringBox.SyncFilter()
     secondaryBox.SyncFilter()
 end
 
@@ -875,19 +878,32 @@ local function BuildPanel(cf)
     list.frame:SetPoint("TOPLEFT", 8, -58)
     list.frame:SetPoint("BOTTOMRIGHT", -6, 24)
 
-    -- The top row is full (search, offline, collapse), so this one sits at
-    -- the bottom right, beside the footer.
-    secondaryBox = U.Toggle(panel, "Hide secondary professions",
-        function() return ns.db.guildHideSecondary == true end,
-        function(on)
-            ns.db.guildHideSecondary = on
-            Refresh()
+    -- The top row is full (search, offline, collapse), so these sit at the
+    -- bottom right, beside the footer; short labels, the tooltip says which.
+    local function HideToggle(label, key, which)
+        local box = U.Toggle(panel, label,
+            function() return ns.db[key] == true end,
+            function(on)
+                ns.db[key] = on
+                Refresh()
+            end)
+        box:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(label, 1, 1, 1)
+            GameTooltip:AddLine("Leaves out " .. which .. ".", U.INK_DIM[1], U.INK_DIM[2], U.INK_DIM[3], true)
+            GameTooltip:Show()
         end)
-    secondaryBox:SetPoint("BOTTOMRIGHT", -150, 1)
+        box:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        return box
+    end
+    secondaryBox = HideToggle("Hide secondary", "guildHideSecondary", "Cooking, First Aid and Fishing")
+    secondaryBox:SetPoint("BOTTOMRIGHT", -90, 1)
+    gatheringBox = HideToggle("Hide gathering", "guildHideGathering", "Herbalism, Mining and Skinning")
+    gatheringBox:SetPoint("BOTTOMRIGHT", secondaryBox, "BOTTOMLEFT", -88, 0)
 
     footer = U.Ink(panel, "GameFontHighlightSmall", "", U.INK_DIM)
     footer:SetPoint("BOTTOMLEFT", 12, 6)
-    footer:SetPoint("BOTTOMRIGHT", secondaryBox, "BOTTOMLEFT", -8, 5)
+    footer:SetPoint("BOTTOMRIGHT", gatheringBox, "BOTTOMLEFT", -8, 5)
     footer:SetJustifyH("LEFT")
     footer:SetWordWrap(false)
 
@@ -1179,5 +1195,5 @@ end
 ns.GuildTab = { Build = Build, Refresh = Refresh, Show = ShowPanel, Hide = HidePanel,
     Panel = function() return panel end, Tab = function() return tab end, List = function() return list end,
     Search = function() return search end, FoldAll = function() return foldAll end,
-    SecondaryBox = function() return secondaryBox end,
+    SecondaryBox = function() return secondaryBox end, GatheringBox = function() return gatheringBox end,
     OpenRecipes = OpenRecipes, RecipeWindow = function() return recipeWin end }
