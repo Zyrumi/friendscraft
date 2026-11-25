@@ -998,7 +998,7 @@ local function PlaceTab(cf)
         end
     end
     if before then
-        last, gap = before, -6
+        last = before
     end
     tab:ClearAllPoints()
     tab:SetPoint("TOPLEFT", last, "BOTTOMLEFT", 0, gap)
