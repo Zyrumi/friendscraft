@@ -11,6 +11,12 @@
 --      on Forever, so it is never shown.
 -- The tab is our own button and panel on top of the guild window. It never
 -- changes the window's display mode, so the game's own tabs keep working.
+--
+-- Other addons can add side tabs the same way (GuildSuggestion does). Each
+-- such tab carries .sideTabAddon = its addon's name; tabs line up in name
+-- order under the game's tabs, and clicking another addon's tab closes our
+-- panel. Our panel opens one frame after the click, so another addon closing
+-- its own panel on that click can't undo what ours sets up.
 
 local _, ns = ...
 
@@ -32,6 +38,8 @@ local recipeWin -- one member's recipes, opened by clicking them
 local shownIds = {} -- profession ids on the page, for "Collapse all"
 local folded = {} -- [profession id] = true while folded (this session only)
 local refreshPending = false
+local SIDE_TAB_ID = "FriendsCraft"
+local hookedTabs = {} -- other addons' side tabs we close our panel for
 
 -------------------------------------------------------------------------------
 -- Data
@@ -806,6 +814,9 @@ local function ShowPanel()
     LowerChatBar()
     MuteBottomButtons()
     SetBlizzardTabsChecked(CommunitiesFrame, false)
+    for t in pairs(hookedTabs) do
+        if t.SetChecked then t:SetChecked(false) end
+    end
     tab:SetChecked(true)
     Query()
     Refresh()
@@ -929,6 +940,7 @@ local function MakeTab(cf)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
     b.tooltip = "Professions"
+    b.sideTabAddon = SIDE_TAB_ID
     local icon = rawget(b, "Icon") or rawget(b, "icon")
     if type(icon) ~= "table" then
         icon = b:CreateTexture(nil, "ARTWORK")
@@ -943,7 +955,8 @@ local function MakeTab(cf)
         if PlaySound and SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_TAB then
             pcall(PlaySound, SOUNDKIT.IG_CHARACTER_INFO_TAB)
         end
-        ShowPanel()
+        b:SetChecked(true)
+        C_Timer.After(0, ns.Safe(ShowPanel, "guild tab"))
     end)
     b:Hide()
     return b
@@ -969,8 +982,26 @@ local function PlaceTab(cf)
             break
         end
     end
+    -- Other addons' side tabs: clicking one closes our panel, and any whose
+    -- name comes before ours goes above us.
+    local gap, before = -20, nil
+    for _, child in ipairs({ cf:GetChildren() }) do
+        local id = rawget(child, "sideTabAddon")
+        if type(id) == "string" and id ~= SIDE_TAB_ID then
+            if not hookedTabs[child] and child.HookScript then
+                hookedTabs[child] = true
+                child:HookScript("OnClick", HidePanel)
+            end
+            if id < SIDE_TAB_ID and child:IsShown() and (not before or id > before.sideTabAddon) then
+                before = child
+            end
+        end
+    end
+    if before then
+        last, gap = before, -6
+    end
     tab:ClearAllPoints()
-    tab:SetPoint("TOPLEFT", last, "BOTTOMLEFT", 0, -20)
+    tab:SetPoint("TOPLEFT", last, "BOTTOMLEFT", 0, gap)
     tab:Show()
     if panel:IsShown() then
         SetBlizzardTabsChecked(cf, false)

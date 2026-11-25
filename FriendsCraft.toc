@@ -2,7 +2,7 @@
 ## Title: FriendsCraft
 ## IconTexture: Interface\Icons\INV_Relics_LibramOfHope
 ## Notes: Share professions, gold, recipes, bags and a shopping list with your friends.
-## Version: 0.6.3
+## Version: 0.6.4
 ## SavedVariables: FriendsCraftDB
 
 Core.lua
